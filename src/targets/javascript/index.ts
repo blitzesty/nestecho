@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { SDKMaker } from '../../sdk-maker.abstract.class';
 
 export class JavaScriptSDKMaker extends SDKMaker implements SDKMaker {
@@ -18,4 +19,6 @@ export class JavaScriptSDKMaker extends SDKMaker implements SDKMaker {
 }
 
 const a = new JavaScriptSDKMaker();
-a.init();
+a.init({
+    absolutePath: path.resolve(__dirname),
+});

@@ -1,3 +1,8 @@
+import {
+    Expression,
+    Identifier,
+    TSTypeAnnotation,
+} from '@babel/types';
 import { DeclarationFileType } from './declaration-file-type.enum';
 
 export interface SDKMakerOptions {
@@ -6,36 +11,31 @@ export interface SDKMakerOptions {
     basicPackageName?: string;
 }
 
-export interface DeclarationImportMap {
-    [pathname: string]: {
-        name: string;
-        aliasedName: string;
-    }
-}
-
-export interface DeclarationClass {
-    [name: string]: {
-        type: string;
-        isTypeImported: boolean;
-    }
+export interface ImportItem {
+    path: string;
+    name: string;
+    aliasedName: string;
 }
 
 interface BaseDeclaration {
-    pathname: string;
+    path: string;
+    name: string;
+    imports: ImportItem[];
 }
 
 export interface DTOClassDeclaration extends BaseDeclaration {
-    type: 'dto';
-    importMap: DeclarationImportMap;
-    classes: DeclarationClass[];
+    type: DeclarationFileType.DTO;
+    superClass: Identifier;
+    structure: Record<string, TSTypeAnnotation>;
+}
+
+export interface EnumDeclaration extends BaseDeclaration {
+    type: DeclarationFileType.ENUM;
+    structure: Record<string, Expression>;
 }
 
 export interface Context {
-    absolutePathname: string;
+    absolutePath: string;
 }
 
-export type DeclarationMap = {
-    type: DeclarationFileType.DTO;
-    declarations: DTOClassDeclaration;
-} | {};
-
+export type Declaration = DTOClassDeclaration | EnumDeclaration;
