@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as _ from 'lodash';
 import { DeclarationFileType } from './declaration-file-type.enum';
 import * as fs from 'fs-extra';
-import { parseTypeScriptAST } from './utils';
+import { parseAst } from './utils';
 import {
     ClassBody,
     ClassDeclaration,
@@ -140,7 +140,7 @@ export abstract class SDKMaker {
 
             for (const [declarationFilePath, declarationFileContent] of Object.entries(declarationFileMap)) {
                 try {
-                    const astBody = parseTypeScriptAST(declarationFileContent)?.program?.body || [];
+                    const astBody = parseAst(declarationFileContent)?.program?.body || [];
                     const normalizedPath = declarationFilePath.replace(/\.d\.ts$/g, '');
                     const imports = astBody?.filter((item) => item.type === 'ImportDeclaration').reduce((result: ImportItem[], currentDeclaration: ImportDeclaration) => {
                         const specifiers: ImportSpecifier[] = (currentDeclaration.specifiers || []).filter((specifier) => specifier.type === 'ImportSpecifier') as ImportSpecifier[];
