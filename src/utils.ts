@@ -1,6 +1,9 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import traverse from '@babel/traverse';
+import traverse, {
+    NodePath,
+    Scope,
+} from '@babel/traverse';
 import {
     ParseResult,
     parse,
@@ -9,13 +12,18 @@ import generate from '@babel/generator';
 import * as _ from 'lodash';
 import {
     ClassDeclaration,
+    Decorator,
     File,
+    Identifier,
     ImportDeclaration,
+    Statement,
     StringLiteral,
+    blockStatement,
     classProperty,
     identifier,
     stringLiteral,
 } from '@babel/types';
+import template from '@babel/template';
 
 export const parseAst = (content) => {
     return parse(content, {
@@ -38,16 +46,31 @@ export const parseAst = (content) => {
     });
 };
 
-// const findClassBodyPath = (nodePath: any) => {
-//     if (!nodePath) {
-//         return null;
-//     }
-//     if (nodePath?.node?.type === 'ClassDeclaration') {
-//         return nodePath;
-//     } else {
-//         return findClassBodyPath(nodePath?.parentPath);
-//     }
-// };
+export const isDtoInReturnType = (nodePath: NodePath) => {
+    if (!nodePath) {
+        return false;
+    }
+
+    const getAnnotationNodePath = (nodePath: NodePath): NodePath => {
+        if (!nodePath) {
+            return null;
+        }
+
+        if (nodePath?.node?.type === 'TSTypeAnnotation') {
+            return nodePath;
+        }
+
+        return getAnnotationNodePath(nodePath?.parentPath);
+    };
+
+    const annotationNodePath = getAnnotationNodePath(nodePath);
+
+    if (!annotationNodePath) {
+        return false;
+    }
+
+    return annotationNodePath?.parentPath?.node?.type === 'ClassMethod';
+};
 
 interface ImportItem {
     imported: string;
@@ -177,84 +200,228 @@ const getControllerType = (importItems: ImportItem[], classDeclaration: ClassDec
     return result;
 };
 
-const transformCode = () => {
-    const originalAst = parseAst(fs.readFileSync(path.resolve('/root/workspace/matrindex-api/src/subscription/subscription.controller.ts'), 'utf-8'));
-    const ast = _.cloneDeep(originalAst);
-    const importItems = getImports(ast);
+type ApiRequestMappingType = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+interface ApiRequestMapping {
+    type: ApiRequestMappingType;
+    path: string;
+}
+
+const getApiRequestMappingType = (importItems: ImportItem[], decorators: Decorator[]) => {
+    let result: ApiRequestMapping;
+
+    if (
+        !Array.isArray(decorators) ||
+        !decorators.length ||
+        !Array.isArray(importItems) ||
+        !importItems.length
+    ) {
+        return null;
+    }
+
+    const restfulMethods = [
+        'Get',
+        'Post',
+        'Put',
+        'Patch',
+        'Delete',
+    ];
+    const requestMappingDecoratorMap = restfulMethods.reduce((result, currentRestfulMethod) => {
+        const localName = importItems.find((importItem) => {
+            return importItem.imported === currentRestfulMethod && importItem.source === '@nestjs/common';
+        })?.local;
+
+        if (localName) {
+            result[localName] = currentRestfulMethod;
+        }
+
+        return result;
+    }, {} as Record<string, string>);
+
+    for (const decorator of decorators) {
+        if (
+            decorator.expression.type !== 'CallExpression' ||
+            decorator.expression.callee.type !== 'Identifier' ||
+            !Object.keys(requestMappingDecoratorMap).includes(decorator.expression.callee.name) || (
+                decorator.expression.arguments?.[0] &&
+                decorator.expression.arguments?.[0]?.type !== 'StringLiteral'
+            )
+        ) {
+            continue;
+        }
+
+        const calleeName = decorator.expression.callee.name;
+        const type = requestMappingDecoratorMap[calleeName].toUpperCase() as ApiRequestMappingType;
+
+        if (!type) {
+            continue;
+        }
+
+        result = {
+            type,
+            path: (decorator.expression.arguments?.[0] as StringLiteral)?.value ?? null,
+        };
+    }
+
+    return result;
+};
+
+interface TransformCodeOptions {
+    version: string;
+}
+
+const checkApiKeyEnabled = (
+    importItems: ImportItem[],
+    decoratorExpressions: Decorator[],
+    scope?: Scope,
+) => {
+    if (!Array.isArray(decoratorExpressions) || !decoratorExpressions.length) {
+        return false;
+    }
+
     const authGuardIdentifier = importItems.find((importItem) => {
         return importItem.type === 'ImportSpecifier' && importItem.imported === 'AuthGuard' && importItem.source === '@nestjs/passport';
     })?.local;
     const useGuardsIdentifier = importItems.find((importItem) => {
         return importItem.type === 'ImportSpecifier' && importItem.imported === 'UseGuards' && importItem.source === '@nestjs/common';
     })?.local;
-    let globalApiKeyAuthEnabled = false;
+    let apiKeyEnabled = false;
 
-    if (authGuardIdentifier) {
-        traverse(ast, {
-            Identifier(nodePath) {
-                if (
-                    nodePath.node.name === authGuardIdentifier &&
-                    nodePath?.parentPath?.node?.type === 'CallExpression' &&
-                    nodePath?.parentPath?.parentPath?.node?.type === 'CallExpression' &&
-                    nodePath?.parentPath?.parentPath?.node?.callee?.type === 'Identifier' &&
-                    nodePath?.parentPath?.parentPath?.node?.callee?.name === useGuardsIdentifier &&
-                    nodePath?.parentPath?.parentPath?.parentPath?.node?.type === 'Decorator' &&
-                    nodePath?.parentPath?.parentPath?.node?.arguments?.length > 0
-                ) {
-                    traverse(
-                        nodePath?.parentPath?.node?.arguments?.[0],
-                        {
-                            StringLiteral(stringLiteralNodePath) {
-                                if (stringLiteralNodePath?.node?.value === 'api-key') {
-                                    globalApiKeyAuthEnabled = true;
-                                }
-                            },
-                        },
-                        nodePath?.parentPath?.scope,
-                    );
-                }
-            },
-        });
+    if (!authGuardIdentifier || !useGuardsIdentifier) {
+        return false;
     }
 
-    console.log('LENCONDA:', globalApiKeyAuthEnabled);
+    for (const decoratorExpression of decoratorExpressions) {
+        traverse(
+            decoratorExpression,
+            {
+                Identifier(nodePath) {
+                    if (
+                        nodePath.node.name === authGuardIdentifier &&
+                        nodePath?.parentPath?.node?.type === 'CallExpression' &&
+                        nodePath?.parentPath?.parentPath?.node?.type === 'CallExpression' &&
+                        nodePath?.parentPath?.parentPath?.node?.callee?.type === 'Identifier' &&
+                        nodePath?.parentPath?.parentPath?.node?.callee?.name === useGuardsIdentifier &&
+                        nodePath?.parentPath?.parentPath?.parentPath?.node?.type === 'Decorator' &&
+                        nodePath?.parentPath?.parentPath?.node?.arguments?.length > 0
+                    ) {
+                        traverse(
+                            nodePath?.parentPath?.node?.arguments?.[0],
+                            {
+                                StringLiteral(stringLiteralNodePath) {
+                                    if (stringLiteralNodePath?.node?.value === 'api-key') {
+                                        apiKeyEnabled = true;
+                                    }
+                                },
+                            },
+                            nodePath?.parentPath?.scope,
+                        );
+                    }
+                },
+            },
+            scope,
+        );
+    }
+
+    return apiKeyEnabled;
+};
+
+const transformCode = (options: TransformCodeOptions) => {
+    const originalAst = parseAst(fs.readFileSync(path.resolve('/root/workspace/matrindex-api/src/subscription/subscription.controller.ts'), 'utf-8'));
+    const ast = _.cloneDeep(originalAst);
+    const importItems = getImports(ast);
+
+    // console.log('LENCONDA:', globalApiKeyAuthEnabled);
 
     traverse(ast, {
-        Identifier(nodePath) {
-            if (nodePath?.node?.name?.endsWith('DTO') && nodePath?.parent?.type !== 'ImportSpecifier') {
-                nodePath.node.name = `PartialDeep<${nodePath.node.name}>`;
-            }
-        },
-        ImportDeclaration(nodePath) {
-            if (nodePath?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
-                nodePath.node.source.value = nodePath.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
-            }
-        },
-        ClassDeclaration(nodePath) {
-            const apiController = getControllerType(importItems, nodePath?.node) || {
+        ClassDeclaration(nodePath1) {
+            const controllerApiKeyEnabled = checkApiKeyEnabled(
+                importItems,
+                nodePath1?.node?.decorators,
+                nodePath1.scope,
+            );
+            const apiController = getControllerType(importItems, nodePath1?.node) || {
                 type: null,
                 path: '/',
             };
-            const basePathnamePropertyExpression = classProperty(identifier('basePathname'), stringLiteral(apiController.path));
+            let pathPrefix = '';
+
+            switch (apiController.type) {
+                case 'admin':
+                    pathPrefix = '/admin_api';
+                    break;
+                case 'open':
+                    pathPrefix = '/api';
+                    break;
+                default:
+                    break;
+            }
+
+            const basePathnamePropertyExpression = classProperty(identifier('basePathname'), stringLiteral(pathPrefix + `/v${options.version ?? 1}` + apiController.path));
 
             basePathnamePropertyExpression.accessibility = 'protected';
-            (nodePath?.node as ClassDeclaration).body.body.unshift(basePathnamePropertyExpression);
+            (nodePath1?.node as ClassDeclaration).body.body.unshift(basePathnamePropertyExpression);
 
             traverse(
-                nodePath.node,
+                nodePath1.node,
                 {
-                    ClassMethod(nodePath) {
-                        if (nodePath?.node?.kind === 'constructor' && typeof nodePath?.remove === 'function') {
-                            nodePath.remove();
+                    Identifier(nodePath2) {
+                        if (
+                            nodePath2?.node?.name?.endsWith('DTO') &&
+                            nodePath2?.parentPath?.node?.type !== 'ImportSpecifier' &&
+                            !isDtoInReturnType(nodePath2)
+                        ) {
+                            nodePath2.node.name = `PartialDeep<${nodePath2.node.name}>`;
                         }
                     },
+                    ImportDeclaration(nodePath2) {
+                        if (nodePath2?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
+                            nodePath2.node.source.value = nodePath2.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
+                        }
+                    },
+                    ClassMethod(nodePath2) {
+                        if (nodePath2?.node?.kind === 'constructor') {
+                            nodePath2.remove();
+                            return;
+                        }
+
+                        if (!controllerApiKeyEnabled) {
+                            const methodApiKeyEnabled = checkApiKeyEnabled(importItems, nodePath2?.node?.decorators, nodePath2?.scope);
+
+                            if (!methodApiKeyEnabled) {
+                                nodePath2.remove();
+                                return;
+                            }
+                        }
+
+                        const apiRequestMapping = getApiRequestMappingType(importItems, nodePath2?.node?.decorators);
+
+                        if (!apiRequestMapping) {
+                            nodePath2.remove();
+                            return;
+                        }
+
+                        const newBody = template.ast(
+                            `
+                                const currentMethodPath = this.basePathname + '${apiRequestMapping.path ?? ''}';
+                                const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, ${(nodePath2?.node?.key as Identifier)?.name});
+                                return;
+                            `,
+                        );
+
+                        nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
+                    },
                 },
-                nodePath.scope,
+                nodePath1.scope,
             );
         },
     });
 
+    ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
+    ast.program.body.unshift(template.ast('import { CUSTOM_DESERIALIZER } from \'@mtrxjs/basics/dist/common/common.constant\';') as Statement);
+
     return generate(ast)?.code;
 };
 
-console.log(transformCode());
+console.log(transformCode({
+    version: '1',
+}));
