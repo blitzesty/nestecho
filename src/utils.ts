@@ -18,6 +18,7 @@ import {
     ImportDeclaration,
     Statement,
     StringLiteral,
+    TSTypeAnnotation,
     blockStatement,
     classProperty,
     identifier,
@@ -325,10 +326,38 @@ const checkApiKeyEnabled = (
     return apiKeyEnabled;
 };
 
+interface ApiMethodOptionsDescriptorItem {
+    [identifier: string]: {
+        annotation: TSTypeAnnotation;
+        transferIdentifier?: string;
+    }
+}
+
+interface ApiMethodOptionsDescriptor {
+    body: ApiMethodOptionsDescriptorItem;
+    param: ApiMethodOptionsDescriptorItem;
+    query: ApiMethodOptionsDescriptorItem;
+}
+
 const transformCode = (options: TransformCodeOptions) => {
     const originalAst = parseAst(fs.readFileSync(path.resolve('/root/workspace/matrindex-api/src/subscription/subscription.controller.ts'), 'utf-8'));
     const ast = _.cloneDeep(originalAst);
     const importItems = getImports(ast);
+    const paramDecoratorMap = [
+        'Body',
+        'Query',
+        'Param',
+    ].reduce((result, currentRestfulMethod) => {
+        const localName = importItems.find((importItem) => {
+            return importItem.imported === currentRestfulMethod && importItem.source === '@nestjs/common';
+        })?.local;
+
+        if (localName) {
+            result[localName] = currentRestfulMethod;
+        }
+
+        return result;
+    }, {} as Record<string, string>);
 
     // console.log('LENCONDA:', globalApiKeyAuthEnabled);
 
@@ -409,6 +438,79 @@ const transformCode = (options: TransformCodeOptions) => {
                         );
 
                         nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
+
+                        const options: ApiMethodOptionsDescriptor = (nodePath2.node.params || []).reduce(
+                            (result, param) => {
+                                let type: 'body' | 'query' | 'param';
+                                let transferIdentifier: string;
+                                let identifier: string;
+                                let annotation: TSTypeAnnotation;
+
+                                for (const paramDecorator of (param?.decorators || [])) {
+                                    if (paramDecorator.expression?.type === 'CallExpression' && paramDecorator.expression?.callee?.type === 'Identifier') {
+                                        const decoratorType = paramDecoratorMap[paramDecorator.expression?.callee.name];
+
+                                        if (!decoratorType) {
+                                            continue;
+                                        }
+
+                                        switch (decoratorType) {
+                                            case 'Body': {
+                                                type = 'body';
+                                                break;
+                                            }
+                                            case 'Param': {
+                                                type = 'param';
+                                                break;
+                                            }
+                                            case 'Query': {
+                                                type = 'query';
+                                                break;
+                                            }
+                                            default:
+                                                break;
+                                        }
+
+                                        transferIdentifier = (paramDecorator.expression.arguments?.[0] as StringLiteral)?.value;
+                                    }
+                                }
+
+                                switch (param.type) {
+                                    case 'Identifier':
+                                        identifier = param.name;
+                                        if (param.typeAnnotation?.type === 'TSTypeAnnotation') {
+                                            annotation = param.typeAnnotation;
+                                        }
+                                        break;
+                                    case 'AssignmentPattern':
+                                        if (param.left.type === 'Identifier') {
+                                            identifier = param.left.name;
+                                            if (param?.left?.typeAnnotation?.type === 'TSTypeAnnotation') {
+                                                annotation = param.left.typeAnnotation;
+                                            }
+                                        }
+                                        break;
+                                    default:
+                                        break;
+                                }
+
+                                if (!type || (type !== 'body' && !transferIdentifier) || !identifier) {
+                                    return result;
+                                }
+
+                                result[type][identifier] = {
+                                    annotation,
+                                    transferIdentifier,
+                                };
+
+                                return result;
+                            },
+                            {
+                                body: {},
+                                query: {},
+                                param: {},
+                            } as ApiMethodOptionsDescriptor,
+                        );
                     },
                 },
                 nodePath1.scope,
