@@ -29,6 +29,8 @@ import {
     tsTypeParameterInstantiation,
 } from '@babel/types';
 import template from '@babel/template';
+import { ESLint } from 'eslint';
+import { cosmiconfigSync } from 'cosmiconfig';
 
 export const parseAst = (content) => {
     return parse(content, {
@@ -82,6 +84,98 @@ export const isDtoInReturnType = (nodePath: NodePath) => {
             nodePath?.parentPath?.parentPath?.node?.typeName?.name === 'PartialDeep'
         )
     );
+};
+
+export type LinterPlugin = (code: string, fromPath: string) => Promise<string>;
+export interface LinterOptions extends ESLint.Options {
+    prePlugins?: LinterPlugin[];
+    postPlugins?: LinterPlugin[];
+}
+
+export const lintCode = async (
+    code: string,
+    options: LinterOptions = {},
+): Promise<string> => {
+    const {
+        cwd: userSpecifiedCwd,
+        prePlugins = [],
+        postPlugins = [],
+        overrideConfig = {},
+        ...otherESLintConfig
+    } = options;
+    let eslintConfigFilePath = userSpecifiedCwd;
+
+    if (!eslintConfigFilePath) {
+        const eslintConfigPaths = [
+            path.resolve(__dirname, '../.eslintrc.js'),
+        ];
+        const currentProjectESLintConfig = cosmiconfigSync('eslint').search();
+        eslintConfigFilePath = currentProjectESLintConfig?.filepath
+            ? currentProjectESLintConfig.filepath
+            : eslintConfigPaths.find((pathname) => fs.existsSync(pathname));
+    }
+
+    if (!eslintConfigFilePath) {
+        return code;
+    }
+
+    const eslint = new ESLint({
+        ...otherESLintConfig,
+        allowInlineConfig: true,
+        cwd: path.dirname(eslintConfigFilePath),
+        overrideConfig: _.merge({}, {
+            rules: {
+                'array-element-newline': ['error', {
+                    'multiline': true,
+                    'minItems': 2,
+                }],
+                'array-bracket-newline': ['error', {
+                    'multiline': true,
+                    'minItems': 2,
+                }],
+                'object-curly-newline': ['error', {
+                    'ObjectExpression': 'always',
+                    'ObjectPattern': 'always',
+                    'ImportDeclaration': {
+                        'multiline': true,
+                        'minProperties': 2,
+                    },
+                    'ExportDeclaration': {
+                        'multiline': true,
+                        'minProperties': 2,
+                    },
+                }],
+                'object-curly-spacing': ['error', 'always'],
+                'object-property-newline': ['error', { allowAllPropertiesOnSameLine: false }],
+                'no-undef': 'off',
+                'no-unused-vars': 'off', // or "@typescript-eslint/no-unused-vars": "off",
+                'unused-imports/no-unused-imports': 'error',
+                'unused-imports/no-unused-vars': [
+                    'warn',
+                    {
+                        'vars': 'all',
+                        'varsIgnorePattern': '^_',
+                        'args': 'after-used',
+                        'argsIgnorePattern': '^_',
+                    },
+                ],
+            },
+        }, overrideConfig),
+        fix: true,
+    });
+    let rawCode: string = code;
+
+    for (const prePlugin of prePlugins) {
+        rawCode = await prePlugin(rawCode, eslintConfigFilePath);
+    }
+
+    rawCode = _.get(await eslint.lintText(rawCode), '[0].output') as string || rawCode;
+
+    for (const postPlugin of postPlugins) {
+        rawCode = await postPlugin(rawCode, eslintConfigFilePath);
+    }
+
+    return rawCode;
 };
 
 interface ImportItem {
@@ -279,6 +373,7 @@ const getApiRequestMappingType = (importItems: ImportItem[], decorators: Decorat
 
 interface TransformCodeOptions {
     version: string;
+    decoratorWhiteList?: string[];
 }
 
 const checkApiKeyEnabled = (
@@ -353,7 +448,7 @@ interface ApiMethodOptionsDescriptor {
     query: ApiMethodOptionsDescriptorItem;
 }
 
-const transformCode = (options: TransformCodeOptions) => {
+const transformCode = async (options: TransformCodeOptions) => {
     const originalAst = parseAst(fs.readFileSync(path.resolve('/root/workspace/matrindex-api/src/subscription/subscription.controller.ts'), 'utf-8'));
     const ast = _.cloneDeep(originalAst);
     const importItems = getImports(ast);
@@ -376,6 +471,11 @@ const transformCode = (options: TransformCodeOptions) => {
     // console.log('LENCONDA:', globalApiKeyAuthEnabled);
 
     traverse(ast, {
+        ImportDeclaration(nodePath2) {
+            if (nodePath2?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
+                nodePath2.node.source.value = nodePath2.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
+            }
+        },
         ClassDeclaration(nodePath1) {
             const controllerApiKeyEnabled = checkApiKeyEnabled(
                 importItems,
@@ -407,11 +507,6 @@ const transformCode = (options: TransformCodeOptions) => {
             traverse(
                 nodePath1.node,
                 {
-                    ImportDeclaration(nodePath2) {
-                        if (nodePath2?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
-                            nodePath2.node.source.value = nodePath2.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
-                        }
-                    },
                     ClassMethod(nodePath2) {
                         if (nodePath2?.node?.kind === 'constructor') {
                             nodePath2.remove();
@@ -571,45 +666,52 @@ const transformCode = (options: TransformCodeOptions) => {
                 nodePath1.scope,
             );
 
-            ast.program.body.unshift(template.ast('import { PartialDeep } from \'@mtrxjs/basics/dist/common/common.interface\';') as Statement);
-            ast.program.body.unshift(template.ast('import { CUSTOM_DESERIALIZER } from \'@mtrxjs/basics/dist/common/common.constant\';') as Statement);
-            ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
-
             traverse(
                 nodePath1.node,
                 {
                     TSTypeReference(nodePath2) {
-                        // console.log(
-                        //     nodePath2?.node?.typeName?.type === 'Identifier',
-                        //     (nodePath2?.node?.typeName as Identifier)?.name?.endsWith('DTO'),
-                        //     !isDtoInReturnType(nodePath2),
-                        // );
                         if (
                             nodePath2?.node?.typeName?.type === 'Identifier' &&
                             nodePath2?.node?.typeName?.name?.endsWith('DTO') &&
                             !isDtoInReturnType(nodePath2)
                         ) {
-                            // nodePath2.node = tsTypeReference(
-                            //     identifier('PartialDeep'),
-                            //     tsTypeParameterInstantiation([
-                            //         nodePath2.node,
-                            //     ]),
-                            // );
                             nodePath2.node.typeParameters = tsTypeParameterInstantiation([
                                 _.clone(nodePath2.node),
                             ]);
                             nodePath2.node.typeName = identifier('PartialDeep');
                         }
                     },
+                    Decorator(nodePath2) {
+                        let decoratorName: string;
+
+                        if (nodePath2?.node?.expression?.type === 'CallExpression' && nodePath2?.node?.expression?.callee?.type === 'Identifier') {
+                            decoratorName = nodePath2.node.expression.callee.name;
+                        } else if (nodePath2?.node?.expression?.type === 'Identifier') {
+                            decoratorName = nodePath2.node.expression.name;
+                        }
+
+                        if (
+                            !Array.isArray(options.decoratorWhiteList) ||
+                            !options.decoratorWhiteList.length ||
+                            !options.decoratorWhiteList.includes(decoratorName)
+                        ) {
+                            nodePath2.remove();
+                            return;
+                        }
+                    },
                 },
                 nodePath1.scope,
             );
+
+            ast.program.body.unshift(template.ast('import { PartialDeep } from \'@mtrxjs/basics/dist/common/common.interface\';') as Statement);
+            ast.program.body.unshift(template.ast('import { CUSTOM_DESERIALIZER } from \'@mtrxjs/basics/dist/common/common.constant\';') as Statement);
+            ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
         },
     });
 
-    return generate(ast)?.code;
+    return await lintCode(generate(ast)?.code);
 };
 
-console.log(transformCode({
+transformCode({
     version: '1',
-}));
+}).then((code) => console.log(code));

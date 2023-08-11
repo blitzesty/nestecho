@@ -1,6 +1,9 @@
 module.exports = {
     parser: '@typescript-eslint/parser',
-    plugins: ['@typescript-eslint/eslint-plugin'],
+    plugins: [
+        '@typescript-eslint/eslint-plugin',
+        'unused-imports',
+    ],
     extends: [
         'alloy',
         'alloy/typescript',
