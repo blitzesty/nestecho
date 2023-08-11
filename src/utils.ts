@@ -27,7 +27,6 @@ import {
     tsTypeAnnotation,
     tsTypeLiteral,
     tsTypeParameterInstantiation,
-    tsTypeReference,
 } from '@babel/types';
 import template from '@babel/template';
 
