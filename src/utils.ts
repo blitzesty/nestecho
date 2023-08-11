@@ -23,6 +23,11 @@ import {
     classProperty,
     identifier,
     stringLiteral,
+    tsPropertySignature,
+    tsTypeAnnotation,
+    tsTypeLiteral,
+    tsTypeParameterInstantiation,
+    tsTypeReference,
 } from '@babel/types';
 import template from '@babel/template';
 
@@ -70,7 +75,14 @@ export const isDtoInReturnType = (nodePath: NodePath) => {
         return false;
     }
 
-    return annotationNodePath?.parentPath?.node?.type === 'ClassMethod';
+    return (
+        annotationNodePath?.parentPath?.node?.type === 'ClassMethod' || (
+            nodePath?.parentPath?.node?.type === 'TSTypeParameterInstantiation' &&
+            nodePath?.parentPath?.parentPath?.node?.type === 'TSTypeReference' &&
+            nodePath?.parentPath?.parentPath?.node?.typeName?.type === 'Identifier' &&
+            nodePath?.parentPath?.parentPath?.node?.typeName?.name === 'PartialDeep'
+        )
+    );
 };
 
 interface ImportItem {
@@ -326,11 +338,14 @@ const checkApiKeyEnabled = (
     return apiKeyEnabled;
 };
 
+interface ApiMethodOptionsDescriptorValue {
+    annotation: TSTypeAnnotation;
+    transferIdentifier?: string;
+    required?: boolean;
+}
+
 interface ApiMethodOptionsDescriptorItem {
-    [identifier: string]: {
-        annotation: TSTypeAnnotation;
-        transferIdentifier?: string;
-    }
+    [identifier: string]: ApiMethodOptionsDescriptorValue;
 }
 
 interface ApiMethodOptionsDescriptor {
@@ -393,15 +408,6 @@ const transformCode = (options: TransformCodeOptions) => {
             traverse(
                 nodePath1.node,
                 {
-                    Identifier(nodePath2) {
-                        if (
-                            nodePath2?.node?.name?.endsWith('DTO') &&
-                            nodePath2?.parentPath?.node?.type !== 'ImportSpecifier' &&
-                            !isDtoInReturnType(nodePath2)
-                        ) {
-                            nodePath2.node.name = `PartialDeep<${nodePath2.node.name}>`;
-                        }
-                    },
                     ImportDeclaration(nodePath2) {
                         if (nodePath2?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
                             nodePath2.node.source.value = nodePath2.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
@@ -429,22 +435,13 @@ const transformCode = (options: TransformCodeOptions) => {
                             return;
                         }
 
-                        const newBody = template.ast(
-                            `
-                                const currentMethodPath = this.basePathname + '${apiRequestMapping.path ?? ''}';
-                                const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, ${(nodePath2?.node?.key as Identifier)?.name});
-                                return;
-                            `,
-                        );
-
-                        nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
-
                         const options: ApiMethodOptionsDescriptor = (nodePath2.node.params || []).reduce(
                             (result, param) => {
                                 let type: 'body' | 'query' | 'param';
                                 let transferIdentifier: string;
                                 let identifier: string;
                                 let annotation: TSTypeAnnotation;
+                                let required = true;
 
                                 for (const paramDecorator of (param?.decorators || [])) {
                                     if (paramDecorator.expression?.type === 'CallExpression' && paramDecorator.expression?.callee?.type === 'Identifier') {
@@ -488,6 +485,7 @@ const transformCode = (options: TransformCodeOptions) => {
                                             if (param?.left?.typeAnnotation?.type === 'TSTypeAnnotation') {
                                                 annotation = param.left.typeAnnotation;
                                             }
+                                            required = false;
                                         }
                                         break;
                                     default:
@@ -501,6 +499,7 @@ const transformCode = (options: TransformCodeOptions) => {
                                 result[type][identifier] = {
                                     annotation,
                                     transferIdentifier,
+                                    required,
                                 };
 
                                 return result;
@@ -511,15 +510,103 @@ const transformCode = (options: TransformCodeOptions) => {
                                 param: {},
                             } as ApiMethodOptionsDescriptor,
                         );
+
+                        const bodyOptions = (
+                            [
+                                'body',
+                                'param',
+                                'query',
+                            ] as Array<keyof ApiMethodOptionsDescriptor>
+                        ).reduce((descriptor, currentType) => {
+                            descriptor[currentType] = Object.keys(options?.[currentType]).reduce((result, currentIdentifier) => {
+                                result[currentIdentifier] = options?.[currentType]?.[currentIdentifier]?.transferIdentifier ?? null;
+                                return result;
+                            }, {});
+                            return descriptor;
+                        }, {});
+                        const newBody = template.ast(
+                            `
+                                const currentMethodPath = this.basePathname + '${apiRequestMapping.path ?? ''}';
+                                const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, this.${(nodePath2?.node?.key as Identifier)?.name});
+                                const optionsMap = ${JSON.stringify(bodyOptions)};
+                                return;
+                            `,
+                        );
+
+                        nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
+
+                        const optionsIdentifier = identifier('options');
+
+                        optionsIdentifier.optional = true;
+                        optionsIdentifier.typeAnnotation = tsTypeAnnotation(
+                            tsTypeLiteral(
+                                Object
+                                    .entries(
+                                        _.merge(
+                                            {},
+                                            _.cloneDeep(options.body),
+                                            _.cloneDeep(options.param),
+                                            _.cloneDeep(options.query),
+                                        ),
+                                    )
+                                    .map(([identifierValue, value]) => {
+                                        const {
+                                            required,
+                                            annotation,
+                                        } = value ?? {};
+                                        const currentIdentifier = identifier(identifierValue);
+                                        const signature = tsPropertySignature(
+                                            currentIdentifier,
+                                            annotation,
+                                        );
+
+                                        signature.optional = !required;
+
+                                        return signature;
+                                    }),
+                            ),
+                        );
+                        nodePath2.node.params = [optionsIdentifier];
+                    },
+                },
+                nodePath1.scope,
+            );
+
+            ast.program.body.unshift(template.ast('import { PartialDeep } from \'@mtrxjs/basics/dist/common/common.interface\';') as Statement);
+            ast.program.body.unshift(template.ast('import { CUSTOM_DESERIALIZER } from \'@mtrxjs/basics/dist/common/common.constant\';') as Statement);
+            ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
+
+            traverse(
+                nodePath1.node,
+                {
+                    TSTypeReference(nodePath2) {
+                        // console.log(
+                        //     nodePath2?.node?.typeName?.type === 'Identifier',
+                        //     (nodePath2?.node?.typeName as Identifier)?.name?.endsWith('DTO'),
+                        //     !isDtoInReturnType(nodePath2),
+                        // );
+                        if (
+                            nodePath2?.node?.typeName?.type === 'Identifier' &&
+                            nodePath2?.node?.typeName?.name?.endsWith('DTO') &&
+                            !isDtoInReturnType(nodePath2)
+                        ) {
+                            // nodePath2.node = tsTypeReference(
+                            //     identifier('PartialDeep'),
+                            //     tsTypeParameterInstantiation([
+                            //         nodePath2.node,
+                            //     ]),
+                            // );
+                            nodePath2.node.typeParameters = tsTypeParameterInstantiation([
+                                _.clone(nodePath2.node),
+                            ]);
+                            nodePath2.node.typeName = identifier('PartialDeep');
+                        }
                     },
                 },
                 nodePath1.scope,
             );
         },
     });
-
-    ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
-    ast.program.body.unshift(template.ast('import { CUSTOM_DESERIALIZER } from \'@mtrxjs/basics/dist/common/common.constant\';') as Statement);
 
     return generate(ast)?.code;
 };
