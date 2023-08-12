@@ -111,7 +111,7 @@ export const ensureImport = (options?: EnsureImportOption) => {
         addImport = true,
         sourceFn,
     } = options;
-    const newIdentifier = `${prefix}${identifier}`;
+    const newIdentifier = `${prefix ?? ''}${inputIdentifier}`;
 
     if (!body || !inputIdentifier || !type || typeof sourceFn !== 'function') {
         return null;
