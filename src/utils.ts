@@ -181,7 +181,7 @@ export const ensureImport = (options?: EnsureImportOption) => {
     }
 
     if (!localIdentifier) {
-        if (addImport) {
+        if (addImport && type === 'ImportSpecifier') {
             targetImportDeclaration.specifiers.push(importSpecifier(
                 identifier(newIdentifier),
                 identifier(inputIdentifier),
