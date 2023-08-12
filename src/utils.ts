@@ -22,6 +22,7 @@ import {
     blockStatement,
     classProperty,
     identifier,
+    importSpecifier,
     stringLiteral,
     tsPropertySignature,
     tsTypeAnnotation,
@@ -91,6 +92,108 @@ export interface LinterOptions extends ESLint.Options {
     prePlugins?: LinterPlugin[];
     postPlugins?: LinterPlugin[];
 }
+
+export interface EnsureImportOption {
+    body: Statement[];
+    type: 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportNamespaceSpecifier';
+    identifier: string;
+    prefix?: string;
+    addImport?: boolean;
+    sourceFn: (sources: string[]) => string;
+}
+
+export const ensureImport = (options?: EnsureImportOption) => {
+    const {
+        body,
+        type,
+        identifier: inputIdentifier,
+        prefix,
+        addImport = true,
+        sourceFn,
+    } = options;
+    const newIdentifier = `${prefix}${identifier}`;
+
+    if (!body || !inputIdentifier || !type || typeof sourceFn !== 'function') {
+        return null;
+    }
+
+    const importSources = body
+        .filter((statement) => statement.type === 'ImportDeclaration')
+        .map((importDeclaration: ImportDeclaration) => importDeclaration.source.value)
+        .filter((source) => !!source);
+    const source = sourceFn(importSources);
+
+    if (!source || typeof source !== 'string') {
+        return null;
+    }
+
+    const targetImportDeclaration: ImportDeclaration = body.find((statement) => {
+        return statement.type === 'ImportDeclaration' && statement.source.value === source;
+    }) as ImportDeclaration;
+
+    if (!targetImportDeclaration) {
+        if (addImport) {
+            let importDeclaration: ImportDeclaration;
+            switch (type) {
+                case 'ImportDefaultSpecifier': {
+                    importDeclaration = template.ast(`import ${newIdentifier} from '${source}';`) as ImportDeclaration;
+                    break;
+                }
+                case 'ImportSpecifier': {
+                    importDeclaration = template.ast(`import { ${inputIdentifier} as ${newIdentifier} } from '${source}';`) as ImportDeclaration;
+                    break;
+                }
+                case 'ImportNamespaceSpecifier': {
+                    importDeclaration = template.ast(`import * as ${newIdentifier} from '${source}';`) as ImportDeclaration;
+                    break;
+                }
+            }
+
+            body.unshift(importDeclaration);
+
+            return newIdentifier;
+        } else {
+            return null;
+        }
+    }
+
+    let localIdentifier: string;
+
+    for (const specifier of targetImportDeclaration.specifiers) {
+        if (
+            (type === 'ImportDefaultSpecifier' || type === 'ImportNamespaceSpecifier') &&
+            specifier.type === type &&
+            specifier.local.name === inputIdentifier
+        ) {
+            localIdentifier = inputIdentifier;
+            break;
+        }
+
+        if (
+            type === 'ImportSpecifier' &&
+            specifier.type === 'ImportSpecifier' &&
+            specifier.imported?.type === 'Identifier' &&
+            specifier.imported.name === inputIdentifier
+        ) {
+            localIdentifier = specifier.local.name;
+            break;
+        }
+    }
+
+    if (!localIdentifier) {
+        if (addImport) {
+            targetImportDeclaration.specifiers.push(importSpecifier(
+                identifier(newIdentifier),
+                identifier(inputIdentifier),
+            ));
+            return newIdentifier;
+        } else {
+            return null;
+        }
+    } else {
+        return localIdentifier;
+    }
+};
 
 export const lintCode = async (
     code: string,
@@ -235,45 +338,57 @@ interface ApiController {
 
 type ApiControllerTypeMap = Record<string, ApiControllerType>;
 
-const getControllerType = (importItems: ImportItem[], classDeclaration: ClassDeclaration) => {
+const getControllerType = (body: Statement[], classDeclaration: ClassDeclaration) => {
     let result: ApiController;
     const decorators = classDeclaration?.decorators;
 
     if (
         !Array.isArray(decorators) ||
         !decorators.length ||
-        !Array.isArray(importItems) ||
-        !importItems.length
+        !Array.isArray(body) ||
+        !body.length
     ) {
         return null;
     }
 
     const apiControllerTypeMap = ([
         {
-            type: 'none',
+            controllerType: 'none',
             name: 'Controller',
+            type: 'ImportSpecifier',
             source: '@nestjs/common',
         },
         {
-            type: 'admin',
+            controllerType: 'admin',
             name: 'AdminApiController',
+            type: 'ImportSpecifier',
+            source: 'src/common',
         },
         {
-            type: 'open',
+            controllerType: 'open',
             name: 'ApiController',
+            type: 'ImportSpecifier',
+            source: 'src/common',
         },
     ] as Array<{
-        type: ApiControllerType;
+        type: 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportNamespaceSpecifier';
+        controllerType: ApiControllerType;
         name: string;
         source: string;
     }>).reduce((result, currentItem) => {
-        const localName = importItems.find((importItem) => importItem.imported === currentItem.name)?.local;
+        const localName = ensureImport({
+            identifier: currentItem.name,
+            type: currentItem.type,
+            body,
+            addImport: false,
+            sourceFn: () => currentItem.source,
+        });
 
         if (!localName) {
             return result;
         }
 
-        result[localName] = currentItem.type;
+        result[localName] = currentItem.controllerType;
 
         return result;
     }, {} as ApiControllerTypeMap);
@@ -312,14 +427,14 @@ interface ApiRequestMapping {
     path: string;
 }
 
-const getApiRequestMappingType = (importItems: ImportItem[], decorators: Decorator[]) => {
+const getApiRequestMappingType = (body: Statement[], decorators: Decorator[]) => {
     let result: ApiRequestMapping;
 
     if (
         !Array.isArray(decorators) ||
         !decorators.length ||
-        !Array.isArray(importItems) ||
-        !importItems.length
+        !Array.isArray(body) ||
+        !body.length
     ) {
         return null;
     }
@@ -332,9 +447,13 @@ const getApiRequestMappingType = (importItems: ImportItem[], decorators: Decorat
         'Delete',
     ];
     const requestMappingDecoratorMap = restfulMethods.reduce((result, currentRestfulMethod) => {
-        const localName = importItems.find((importItem) => {
-            return importItem.imported === currentRestfulMethod && importItem.source === '@nestjs/common';
-        })?.local;
+        const localName = ensureImport({
+            identifier: currentRestfulMethod,
+            type: 'ImportSpecifier',
+            body,
+            addImport: false,
+            sourceFn: () => '@nestjs/common',
+        });
 
         if (localName) {
             result[localName] = currentRestfulMethod;
@@ -468,8 +587,6 @@ const transformCode = async (options: TransformCodeOptions) => {
         return result;
     }, {} as Record<string, string>);
 
-    // console.log('LENCONDA:', globalApiKeyAuthEnabled);
-
     traverse(ast, {
         ImportDeclaration(nodePath2) {
             if (nodePath2?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
@@ -482,10 +599,11 @@ const transformCode = async (options: TransformCodeOptions) => {
                 nodePath1?.node?.decorators,
                 nodePath1.scope,
             );
-            const apiController = getControllerType(importItems, nodePath1?.node) || {
+            const apiController = getControllerType(ast.program.body, nodePath1?.node) || {
                 type: null,
                 path: '/',
             };
+
             let pathPrefix = '';
 
             switch (apiController.type) {
@@ -522,7 +640,7 @@ const transformCode = async (options: TransformCodeOptions) => {
                             }
                         }
 
-                        const apiRequestMapping = getApiRequestMappingType(importItems, nodePath2?.node?.decorators);
+                        const apiRequestMapping = getApiRequestMappingType(ast.program.body, nodePath2?.node?.decorators);
 
                         if (!apiRequestMapping) {
                             nodePath2.remove();
