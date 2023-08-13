@@ -586,6 +586,17 @@ const transformCode = async (options: TransformCodeOptions) => {
 
         return result;
     }, {} as Record<string, string>);
+    const importedDtoItemMap = importItems
+        .filter((importItem) => {
+            return importItem.source.endsWith('.dto');
+        })
+        .reduce(
+            (result, importItem) => {
+                result[importItem.local] = importItem;
+                return result;
+            },
+            {},
+        );
 
     traverse(ast, {
         ImportDeclaration(nodePath2) {
@@ -790,7 +801,7 @@ const transformCode = async (options: TransformCodeOptions) => {
                     TSTypeReference(nodePath2) {
                         if (
                             nodePath2?.node?.typeName?.type === 'Identifier' &&
-                            nodePath2?.node?.typeName?.name?.endsWith('DTO') &&
+                            Boolean(importedDtoItemMap[nodePath2?.node?.typeName?.name]) &&
                             !isDtoInReturnType(nodePath2)
                         ) {
                             nodePath2.node.typeParameters = tsTypeParameterInstantiation([
@@ -821,8 +832,24 @@ const transformCode = async (options: TransformCodeOptions) => {
                 nodePath1.scope,
             );
 
-            ast.program.body.unshift(template.ast('import { PartialDeep } from \'@mtrxjs/basics/dist/common/common.interface\';') as Statement);
-            ast.program.body.unshift(template.ast('import { CUSTOM_DESERIALIZER } from \'@mtrxjs/basics/dist/common/common.constant\';') as Statement);
+            ([
+                {
+                    identifier: 'PartialDeep',
+                    type: 'ImportSpecifier',
+                    sourceFn: () => '@mtrxjs/basics/dist/common/common.interface',
+                },
+                {
+                    identifier: 'CUSTOM_DESERIALIZER',
+                    type: 'ImportSpecifier',
+                    sourceFn: () => '@mtrxjs/basics/dist/common/common.constant',
+                },
+            ] as Omit<EnsureImportOption, 'body'>[]).forEach((ensureImportItem) => {
+                ensureImport({
+                    body: ast.program.body,
+                    ...ensureImportItem,
+                });
+            });
+
             ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
         },
     });
