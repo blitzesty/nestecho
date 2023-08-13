@@ -12,6 +12,7 @@ import generate from '@babel/generator';
 import * as _ from 'lodash';
 import {
     ClassDeclaration,
+    ClassMethod,
     Decorator,
     File,
     Identifier,
@@ -193,6 +194,34 @@ export const ensureImport = (options?: EnsureImportOption) => {
     } else {
         return localIdentifier;
     }
+};
+
+export const getReturnDTO = (classMethod: ClassMethod, scope?: Scope) => {
+    if (!classMethod || classMethod.type !== 'ClassMethod') {
+        return null;
+    }
+
+    const returnTypeStatement: TSTypeAnnotation = classMethod?.returnType as TSTypeAnnotation;
+
+    if (returnTypeStatement?.type !== 'TSTypeAnnotation') {
+        return null;
+    }
+
+    try {
+        let dto: string;
+        traverse(
+            classMethod,
+            {
+                Identifier(nodePath) {
+                    // if (Boolean())
+                },
+            },
+            scope,
+        );
+    } catch (e) {
+        return null;
+    }
+    // returnTypeStatement;
 };
 
 export const lintCode = async (
