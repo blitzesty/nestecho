@@ -21,10 +21,12 @@ import {
     identifier,
     importSpecifier,
     stringLiteral,
+    tsAnyKeyword,
     tsPropertySignature,
     tsTypeAnnotation,
     tsTypeLiteral,
     tsTypeParameterInstantiation,
+    tsTypeReference,
 } from '@babel/types';
 import template from '@babel/template';
 import { ESLint } from 'eslint';
@@ -62,7 +64,6 @@ export type ImportType = 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportN
 export interface EnsureImportOption {
     type: ImportType;
     identifier: string;
-    prefix?: string;
     addImport?: boolean;
     sourceFn: (sources: string[]) => string;
 }
@@ -410,7 +411,7 @@ const parseController = async (options: TransformCodeOptions) => {
                 nodePath?.parentPath?.node?.type === 'TSTypeParameterInstantiation' &&
                 nodePath?.parentPath?.parentPath?.node?.type === 'TSTypeReference' &&
                 nodePath?.parentPath?.parentPath?.node?.typeName?.type === 'Identifier' &&
-                nodePath?.parentPath?.parentPath?.node?.typeName?.name === 'PartialDeep'
+                nodePath?.parentPath?.parentPath?.node?.typeName?.name === ensuredImports['PartialDeep']
             )
         );
     };
@@ -418,15 +419,35 @@ const parseController = async (options: TransformCodeOptions) => {
         const {
             type,
             identifier: inputIdentifier,
-            prefix,
             addImport = true,
             sourceFn,
         } = options;
-        const newIdentifier = `${prefix ?? ''}${inputIdentifier}`;
 
         if (!inputIdentifier || !type || typeof sourceFn !== 'function') {
             return null;
         }
+
+        let newIdentifier = inputIdentifier;
+
+        traverse(ast, {
+            ImportDeclaration(nodePath1) {
+                traverse(
+                    nodePath1.node,
+                    {
+                        Identifier(nodePath2) {
+                            if (nodePath2?.node?.name === inputIdentifier) {
+                                const randomPrefix = new Array(8).fill('').map(() => {
+                                    return 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)];
+                                }).join('');
+                                newIdentifier = `${randomPrefix}$$${inputIdentifier}`;
+                                nodePath2.stop();
+                            }
+                        },
+                    },
+                    nodePath1.scope,
+                );
+            },
+        });
 
         const importSources = ast.program.body
             .filter((statement) => statement.type === 'ImportDeclaration')
@@ -519,7 +540,7 @@ const parseController = async (options: TransformCodeOptions) => {
         try {
             let dtoClassName: string;
             traverse(
-                classMethod,
+                classMethod.returnType,
                 {
                     Identifier(nodePath) {
                         if (importedDtoItemMap[nodePath.node.name]) {
@@ -532,6 +553,7 @@ const parseController = async (options: TransformCodeOptions) => {
             );
             return dtoClassName;
         } catch (e) {
+            console.log(e);
             return null;
         }
     };
@@ -622,11 +644,16 @@ const parseController = async (options: TransformCodeOptions) => {
     };
 
     ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
-    ([
+    const ensuredImports = ([
         {
             identifier: 'PartialDeep',
             type: 'ImportSpecifier',
             sourceFn: () => '@mtrxjs/basics/dist/common/common.interface',
+        },
+        {
+            identifier: 'SDKResponse',
+            type: 'ImportSpecifier',
+            sourceFn: () => path.relative(path.dirname(options.fileAbsolutePath), path.resolve(options.workDir, './src/interfaces')),
         },
         {
             identifier: 'CUSTOM_DESERIALIZER',
@@ -638,9 +665,15 @@ const parseController = async (options: TransformCodeOptions) => {
             type: 'ImportDefaultSpecifier',
             sourceFn: () => path.relative(path.dirname(options.fileAbsolutePath), path.resolve(options.workDir, './src/request')),
         },
-    ] as Omit<EnsureImportOption, 'body'>[]).forEach((ensureImportItem) => {
-        ensureImport(ensureImportItem);
-    });
+        {
+            identifier: 'plainToInstance',
+            type: 'ImportSpecifier',
+            sourceFn: () => '@mtrxjs/basics/dist/common/plain-to-instance',
+        },
+    ] as Omit<EnsureImportOption, 'body'>[]).reduce((result, ensureImportItem) => {
+        result[ensureImportItem.identifier] = ensureImport(ensureImportItem);
+        return result;
+    }, {});
 
     const exportDefaultController = Symbol('export.default');
     const controllerDeclarationTypeMap: Record<string | symbol, {
@@ -815,12 +848,30 @@ const parseController = async (options: TransformCodeOptions) => {
                             }, {});
                             return descriptor;
                         }, {});
+                        const returnDtoClassName = getReturnDto(nodePath2.node, nodePath2.scope) ?? 'null';
                         const newBody = template.ast(
                             `
-                                const currentMethodPath = this.basePathname + '${apiRequestMapping.path ?? ''}';
-                                const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, this.${(nodePath2?.node?.key as Identifier)?.name});
+                                let deserializer = Reflect.getMetadata(${ensuredImports['CUSTOM_DESERIALIZER']}, this.${(nodePath2?.node?.key as Identifier)?.name});
                                 const optionsMap = ${JSON.stringify(bodyOptions)};
-                                return;
+                                const ReturnDtoClass = ${returnDtoClassName};
+
+                                if (!deserializer) {
+                                    deserializer = (response) => {
+                                        if (returnDtoClass) {
+                                            return ${ensuredImports['plainToInstance']}(ReturnDtoClass, response?.data, {
+                                                groups: ['response'],
+                                            });
+                                        } else {
+                                            return response?.data;
+                                        }
+                                    };
+                                }
+
+                                return await ${ensuredImports['request']}({
+                                    method: '${apiRequestMapping.type?.toLowerCase()}',
+                                    url: this.basePathname + '${apiRequestMapping.path ?? ''}',
+                                    deserializer,
+                                });
                             `,
                         );
 
@@ -875,7 +926,7 @@ const parseController = async (options: TransformCodeOptions) => {
                             nodePath2.node.typeParameters = tsTypeParameterInstantiation([
                                 _.clone(nodePath2.node),
                             ]);
-                            nodePath2.node.typeName = identifier('PartialDeep');
+                            nodePath2.node.typeName = identifier(ensuredImports['PartialDeep']);
                         }
                     },
                     Decorator(nodePath2) {
@@ -971,6 +1022,50 @@ const parseController = async (options: TransformCodeOptions) => {
                     controllerType: controllerDeclarationTypeMap[controllerName]?.type,
                     type: 'ImportDefaultSpecifier',
                 });
+            }
+        },
+    });
+
+    traverse(ast, {
+        ClassMethod(nodePath1) {
+            if (!nodePath1.node?.returnType) {
+                nodePath1.node.returnType = tsTypeAnnotation(
+                    tsTypeReference(
+                        identifier('Promise'),
+                        tsTypeParameterInstantiation([
+                            tsTypeReference(
+                                identifier(ensuredImports['SDKResponse']),
+                                tsTypeParameterInstantiation([
+                                    tsAnyKeyword(),
+                                ]),
+                            ),
+                        ]),
+                    ),
+                );
+            } else {
+                if (
+                    nodePath1.node?.returnType?.type === 'TSTypeAnnotation' &&
+                    nodePath1.node?.returnType?.typeAnnotation?.type === 'TSTypeReference' &&
+                    nodePath1.node?.returnType?.typeAnnotation?.typeName?.type === 'Identifier' &&
+                    nodePath1.node?.returnType?.typeAnnotation?.typeName?.name === 'Promise' &&
+                    nodePath1.node?.returnType?.typeAnnotation?.typeParameters?.type === 'TSTypeParameterInstantiation'
+                ) {
+                    nodePath1.node.returnType.typeAnnotation.typeParameters = tsTypeParameterInstantiation([
+                        tsTypeReference(
+                            identifier(ensuredImports['SDKResponse']),
+                            nodePath1.node.returnType.typeAnnotation.typeParameters,
+                        ),
+                    ]);
+                } else {
+                    nodePath1.node.returnType = tsTypeAnnotation(
+                        tsTypeReference(
+                            identifier(ensuredImports['SDKResponse']),
+                            tsTypeParameterInstantiation([
+                                tsAnyKeyword(),
+                            ]),
+                        ),
+                    );
+                }
             }
         },
     });
