@@ -4,17 +4,13 @@ import traverse, {
     NodePath,
     Scope,
 } from '@babel/traverse';
-import {
-    ParseResult,
-    parse,
-} from '@babel/parser';
+import { parse } from '@babel/parser';
 import generate from '@babel/generator';
 import * as _ from 'lodash';
 import {
     ClassDeclaration,
     ClassMethod,
     Decorator,
-    File,
     Identifier,
     ImportDeclaration,
     Statement,
@@ -55,551 +51,310 @@ export const parseAst = (content) => {
     });
 };
 
-export const isDtoInReturnType = (nodePath: NodePath) => {
-    if (!nodePath) {
-        return false;
-    }
-
-    const getAnnotationNodePath = (nodePath: NodePath): NodePath => {
-        if (!nodePath) {
-            return null;
-        }
-
-        if (nodePath?.node?.type === 'TSTypeAnnotation') {
-            return nodePath;
-        }
-
-        return getAnnotationNodePath(nodePath?.parentPath);
-    };
-
-    const annotationNodePath = getAnnotationNodePath(nodePath);
-
-    if (!annotationNodePath) {
-        return false;
-    }
-
-    return (
-        annotationNodePath?.parentPath?.node?.type === 'ClassMethod' || (
-            nodePath?.parentPath?.node?.type === 'TSTypeParameterInstantiation' &&
-            nodePath?.parentPath?.parentPath?.node?.type === 'TSTypeReference' &&
-            nodePath?.parentPath?.parentPath?.node?.typeName?.type === 'Identifier' &&
-            nodePath?.parentPath?.parentPath?.node?.typeName?.name === 'PartialDeep'
-        )
-    );
-};
-
 export type LinterPlugin = (code: string, fromPath: string) => Promise<string>;
 export interface LinterOptions extends ESLint.Options {
     prePlugins?: LinterPlugin[];
     postPlugins?: LinterPlugin[];
 }
 
+export type ImportType = 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportNamespaceSpecifier';
+
 export interface EnsureImportOption {
-    body: Statement[];
-    type: 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportNamespaceSpecifier';
+    type: ImportType;
     identifier: string;
     prefix?: string;
     addImport?: boolean;
     sourceFn: (sources: string[]) => string;
 }
-
-export const ensureImport = (options?: EnsureImportOption) => {
-    const {
-        body,
-        type,
-        identifier: inputIdentifier,
-        prefix,
-        addImport = true,
-        sourceFn,
-    } = options;
-    const newIdentifier = `${prefix ?? ''}${inputIdentifier}`;
-
-    if (!body || !inputIdentifier || !type || typeof sourceFn !== 'function') {
-        return null;
-    }
-
-    const importSources = body
-        .filter((statement) => statement.type === 'ImportDeclaration')
-        .map((importDeclaration: ImportDeclaration) => importDeclaration.source.value)
-        .filter((source) => !!source);
-    const source = sourceFn(importSources);
-
-    if (!source || typeof source !== 'string') {
-        return null;
-    }
-
-    const targetImportDeclaration: ImportDeclaration = body.find((statement) => {
-        return statement.type === 'ImportDeclaration' && statement.source.value === source;
-    }) as ImportDeclaration;
-
-    if (!targetImportDeclaration) {
-        if (addImport) {
-            let importDeclaration: ImportDeclaration;
-            switch (type) {
-                case 'ImportDefaultSpecifier': {
-                    importDeclaration = template.ast(`import ${newIdentifier} from '${source}';`) as ImportDeclaration;
-                    break;
-                }
-                case 'ImportSpecifier': {
-                    importDeclaration = template.ast(`import { ${inputIdentifier} as ${newIdentifier} } from '${source}';`) as ImportDeclaration;
-                    break;
-                }
-                case 'ImportNamespaceSpecifier': {
-                    importDeclaration = template.ast(`import * as ${newIdentifier} from '${source}';`) as ImportDeclaration;
-                    break;
-                }
-            }
-
-            body.unshift(importDeclaration);
-
-            return newIdentifier;
-        } else {
-            return null;
-        }
-    }
-
-    let localIdentifier: string;
-
-    for (const specifier of targetImportDeclaration.specifiers) {
-        if (
-            (type === 'ImportDefaultSpecifier' || type === 'ImportNamespaceSpecifier') &&
-            specifier.type === type &&
-            specifier.local.name === inputIdentifier
-        ) {
-            localIdentifier = inputIdentifier;
-            break;
-        }
-
-        if (
-            type === 'ImportSpecifier' &&
-            specifier.type === 'ImportSpecifier' &&
-            specifier.imported?.type === 'Identifier' &&
-            specifier.imported.name === inputIdentifier
-        ) {
-            localIdentifier = specifier.local.name;
-            break;
-        }
-    }
-
-    if (!localIdentifier) {
-        if (addImport && type === 'ImportSpecifier') {
-            targetImportDeclaration.specifiers.push(importSpecifier(
-                identifier(newIdentifier),
-                identifier(inputIdentifier),
-            ));
-            return newIdentifier;
-        } else {
-            return null;
-        }
-    } else {
-        return localIdentifier;
-    }
-};
-
-export const getReturnDTO = (classMethod: ClassMethod, scope?: Scope) => {
-    if (!classMethod || classMethod.type !== 'ClassMethod') {
-        return null;
-    }
-
-    const returnTypeStatement: TSTypeAnnotation = classMethod?.returnType as TSTypeAnnotation;
-
-    if (returnTypeStatement?.type !== 'TSTypeAnnotation') {
-        return null;
-    }
-
-    try {
-        let dto: string;
-        traverse(
-            classMethod,
-            {
-                Identifier(nodePath) {
-                    // if (Boolean())
-                },
-            },
-            scope,
-        );
-    } catch (e) {
-        return null;
-    }
-    // returnTypeStatement;
-};
-
-export const lintCode = async (
-    code: string,
-    options: LinterOptions = {},
-): Promise<string> => {
-    const {
-        cwd: userSpecifiedCwd,
-        prePlugins = [],
-        postPlugins = [],
-        overrideConfig = {},
-        ...otherESLintConfig
-    } = options;
-    let eslintConfigFilePath = userSpecifiedCwd;
-
-    if (!eslintConfigFilePath) {
-        const eslintConfigPaths = [
-            path.resolve(__dirname, '../.eslintrc.js'),
-        ];
-        const currentProjectESLintConfig = cosmiconfigSync('eslint').search();
-        eslintConfigFilePath = currentProjectESLintConfig?.filepath
-            ? currentProjectESLintConfig.filepath
-            : eslintConfigPaths.find((pathname) => fs.existsSync(pathname));
-    }
-
-    if (!eslintConfigFilePath) {
-        return code;
-    }
-
-    const eslint = new ESLint({
-        ...otherESLintConfig,
-        allowInlineConfig: true,
-        cwd: path.dirname(eslintConfigFilePath),
-        overrideConfig: _.merge({}, {
-            rules: {
-                'array-element-newline': ['error', {
-                    'multiline': true,
-                    'minItems': 2,
-                }],
-                'array-bracket-newline': ['error', {
-                    'multiline': true,
-                    'minItems': 2,
-                }],
-                'object-curly-newline': ['error', {
-                    'ObjectExpression': 'always',
-                    'ObjectPattern': 'always',
-                    'ImportDeclaration': {
-                        'multiline': true,
-                        'minProperties': 2,
-                    },
-                    'ExportDeclaration': {
-                        'multiline': true,
-                        'minProperties': 2,
-                    },
-                }],
-                'object-curly-spacing': ['error', 'always'],
-                'object-property-newline': ['error', { allowAllPropertiesOnSameLine: false }],
-                'no-undef': 'off',
-                'no-unused-vars': 'off', // or "@typescript-eslint/no-unused-vars": "off",
-                'unused-imports/no-unused-imports': 'error',
-                'unused-imports/no-unused-vars': [
-                    'warn',
-                    {
-                        'vars': 'all',
-                        'varsIgnorePattern': '^_',
-                        'args': 'after-used',
-                        'argsIgnorePattern': '^_',
-                    },
-                ],
-            },
-        }, overrideConfig),
-        fix: true,
-    });
-    let rawCode: string = code;
-
-    for (const prePlugin of prePlugins) {
-        rawCode = await prePlugin(rawCode, eslintConfigFilePath);
-    }
-
-    rawCode = _.get(await eslint.lintText(rawCode), '[0].output') as string || rawCode;
-
-    for (const postPlugin of postPlugins) {
-        rawCode = await postPlugin(rawCode, eslintConfigFilePath);
-    }
-
-    return rawCode;
-};
-
-interface ImportItem {
+export interface ImportItem {
     imported: string;
     local: string;
     source: string;
-    type: 'ImportSpecifier' | 'ImportNamespaceSpecifier' | 'ImportDefaultSpecifier';
+    type: ImportType;
 }
 
-const getImports = (ast: ParseResult<File>) => {
-    const importDeclarations: ImportDeclaration[] = (ast?.program?.body || [])?.filter((declaration) => declaration.type === 'ImportDeclaration') as ImportDeclaration[];
-    const importItems = importDeclarations.reduce((result: ImportItem[], importDeclaration) => {
-        const sourceValue = importDeclaration?.source?.value;
-        const currentImportItems: ImportItem[] = importDeclaration.specifiers?.map((specifier) => {
-            let imported: string;
-            const local = specifier.local.name;
+export interface ExportedController {
+    local: string;
+    exported: string;
+    name: string;
+    controllerType: ApiControllerType;
+    type: ImportType;
+}
 
-            switch (specifier.type) {
-                case 'ImportNamespaceSpecifier':
-                case 'ImportDefaultSpecifier': {
-                    imported = specifier.local.name;
-                    break;
-                }
-                case 'ImportSpecifier': {
-                    if (specifier.imported.type === 'Identifier') {
-                        imported = specifier.imported.name;
-                    }
-                    break;
-                }
-                default:
-                    break;
-            }
+export type ApiControllerType = 'none' | 'admin' | 'open';
 
-            if (!imported) {
-                return null;
-            }
-
-            return {
-                source: sourceValue,
-                type: specifier.type,
-                imported,
-                local,
-            };
-        }).filter((item) => !!item);
-
-        return result.concat(currentImportItems);
-    }, [] as ImportItem[]);
-    return importItems;
-};
-
-type ApiControllerType = 'none' | 'admin' | 'open';
-
-interface ApiController {
+export interface ApiController {
     type: ApiControllerType;
     path: string;
 }
 
-type ApiControllerTypeMap = Record<string, ApiControllerType>;
+export type ApiControllerTypeMap = Record<string, ApiControllerType>;
 
-const getControllerType = (body: Statement[], classDeclaration: ClassDeclaration) => {
-    let result: ApiController;
-    const decorators = classDeclaration?.decorators;
-
-    if (
-        !Array.isArray(decorators) ||
-        !decorators.length ||
-        !Array.isArray(body) ||
-        !body.length
-    ) {
-        return null;
-    }
-
-    const apiControllerTypeMap = ([
-        {
-            controllerType: 'none',
-            name: 'Controller',
-            type: 'ImportSpecifier',
-            source: '@nestjs/common',
-        },
-        {
-            controllerType: 'admin',
-            name: 'AdminApiController',
-            type: 'ImportSpecifier',
-            source: 'src/common',
-        },
-        {
-            controllerType: 'open',
-            name: 'ApiController',
-            type: 'ImportSpecifier',
-            source: 'src/common',
-        },
-    ] as Array<{
-        type: 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportNamespaceSpecifier';
-        controllerType: ApiControllerType;
-        name: string;
-        source: string;
-    }>).reduce((result, currentItem) => {
-        const localName = ensureImport({
-            identifier: currentItem.name,
-            type: currentItem.type,
-            body,
-            addImport: false,
-            sourceFn: () => currentItem.source,
-        });
-
-        if (!localName) {
-            return result;
-        }
-
-        result[localName] = currentItem.controllerType;
-
-        return result;
-    }, {} as ApiControllerTypeMap);
-
-    for (const decorator of decorators) {
-        if (
-            decorator.expression.type !== 'CallExpression' ||
-            decorator.expression.callee.type !== 'Identifier' ||
-            !Object.keys(apiControllerTypeMap).includes(decorator.expression.callee.name) || (
-                decorator.expression.arguments?.[0] &&
-                decorator.expression.arguments?.[0]?.type !== 'StringLiteral'
-            )
-        ) {
-            continue;
-        }
-
-        const calleeName = decorator.expression.callee.name;
-        const type = apiControllerTypeMap[calleeName];
-
-        if (!type) {
-            continue;
-        }
-
-        result = {
-            type,
-            path: (decorator.expression.arguments?.[0] as StringLiteral)?.value ?? null,
-        };
-    }
-
-    return result;
-};
-
-type ApiRequestMappingType = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-interface ApiRequestMapping {
+export type ApiRequestMappingType = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+export interface ApiRequestMapping {
     type: ApiRequestMappingType;
     path: string;
 }
 
-const getApiRequestMappingType = (body: Statement[], decorators: Decorator[]) => {
-    let result: ApiRequestMapping;
-
-    if (
-        !Array.isArray(decorators) ||
-        !decorators.length ||
-        !Array.isArray(body) ||
-        !body.length
-    ) {
-        return null;
-    }
-
-    const restfulMethods = [
-        'Get',
-        'Post',
-        'Put',
-        'Patch',
-        'Delete',
-    ];
-    const requestMappingDecoratorMap = restfulMethods.reduce((result, currentRestfulMethod) => {
-        const localName = ensureImport({
-            identifier: currentRestfulMethod,
-            type: 'ImportSpecifier',
-            body,
-            addImport: false,
-            sourceFn: () => '@nestjs/common',
-        });
-
-        if (localName) {
-            result[localName] = currentRestfulMethod;
-        }
-
-        return result;
-    }, {} as Record<string, string>);
-
-    for (const decorator of decorators) {
-        if (
-            decorator.expression.type !== 'CallExpression' ||
-            decorator.expression.callee.type !== 'Identifier' ||
-            !Object.keys(requestMappingDecoratorMap).includes(decorator.expression.callee.name) || (
-                decorator.expression.arguments?.[0] &&
-                decorator.expression.arguments?.[0]?.type !== 'StringLiteral'
-            )
-        ) {
-            continue;
-        }
-
-        const calleeName = decorator.expression.callee.name;
-        const type = requestMappingDecoratorMap[calleeName].toUpperCase() as ApiRequestMappingType;
-
-        if (!type) {
-            continue;
-        }
-
-        result = {
-            type,
-            path: (decorator.expression.arguments?.[0] as StringLiteral)?.value ?? null,
-        };
-    }
-
-    return result;
-};
-
-interface TransformCodeOptions {
+export interface TransformCodeOptions {
     version: string;
+    workDir: string;
+    fileAbsolutePath: string;
     decoratorWhiteList?: string[];
 }
 
-const checkApiKeyEnabled = (
-    importItems: ImportItem[],
-    decoratorExpressions: Decorator[],
-    scope?: Scope,
-) => {
-    if (!Array.isArray(decoratorExpressions) || !decoratorExpressions.length) {
-        return false;
-    }
-
-    const authGuardIdentifier = importItems.find((importItem) => {
-        return importItem.type === 'ImportSpecifier' && importItem.imported === 'AuthGuard' && importItem.source === '@nestjs/passport';
-    })?.local;
-    const useGuardsIdentifier = importItems.find((importItem) => {
-        return importItem.type === 'ImportSpecifier' && importItem.imported === 'UseGuards' && importItem.source === '@nestjs/common';
-    })?.local;
-    let apiKeyEnabled = false;
-
-    if (!authGuardIdentifier || !useGuardsIdentifier) {
-        return false;
-    }
-
-    for (const decoratorExpression of decoratorExpressions) {
-        traverse(
-            decoratorExpression,
-            {
-                Identifier(nodePath) {
-                    if (
-                        nodePath.node.name === authGuardIdentifier &&
-                        nodePath?.parentPath?.node?.type === 'CallExpression' &&
-                        nodePath?.parentPath?.parentPath?.node?.type === 'CallExpression' &&
-                        nodePath?.parentPath?.parentPath?.node?.callee?.type === 'Identifier' &&
-                        nodePath?.parentPath?.parentPath?.node?.callee?.name === useGuardsIdentifier &&
-                        nodePath?.parentPath?.parentPath?.parentPath?.node?.type === 'Decorator' &&
-                        nodePath?.parentPath?.parentPath?.node?.arguments?.length > 0
-                    ) {
-                        traverse(
-                            nodePath?.parentPath?.node?.arguments?.[0],
-                            {
-                                StringLiteral(stringLiteralNodePath) {
-                                    if (stringLiteralNodePath?.node?.value === 'api-key') {
-                                        apiKeyEnabled = true;
-                                    }
-                                },
-                            },
-                            nodePath?.parentPath?.scope,
-                        );
-                    }
-                },
-            },
-            scope,
-        );
-    }
-
-    return apiKeyEnabled;
-};
-
-interface ApiMethodOptionsDescriptorValue {
+export interface ApiMethodOptionsDescriptorValue {
     annotation: TSTypeAnnotation;
     transferIdentifier?: string;
     required?: boolean;
 }
 
-interface ApiMethodOptionsDescriptorItem {
+export interface ApiMethodOptionsDescriptorItem {
     [identifier: string]: ApiMethodOptionsDescriptorValue;
 }
 
-interface ApiMethodOptionsDescriptor {
+export interface ApiMethodOptionsDescriptor {
     body: ApiMethodOptionsDescriptorItem;
     param: ApiMethodOptionsDescriptorItem;
     query: ApiMethodOptionsDescriptorItem;
 }
 
-const transformCode = async (options: TransformCodeOptions) => {
+const parseController = async (options: TransformCodeOptions) => {
     const originalAst = parseAst(fs.readFileSync(path.resolve('/root/workspace/matrindex-api/src/subscription/subscription.controller.ts'), 'utf-8'));
     const ast = _.cloneDeep(originalAst);
-    const importItems = getImports(ast);
+
+    const checkApiKeyEnabled = (
+        decoratorExpressions: Decorator[],
+        scope?: Scope,
+    ) => {
+        if (
+            !Array.isArray(decoratorExpressions) ||
+            !decoratorExpressions.length ||
+            !Array.isArray(importItems)
+        ) {
+            return false;
+        }
+
+        const authGuardIdentifier = importItems.find((importItem) => {
+            return importItem.type === 'ImportSpecifier' && importItem.imported === 'AuthGuard' && importItem.source === '@nestjs/passport';
+        })?.local;
+        const useGuardsIdentifier = importItems.find((importItem) => {
+            return importItem.type === 'ImportSpecifier' && importItem.imported === 'UseGuards' && importItem.source === '@nestjs/common';
+        })?.local;
+        let apiKeyEnabled = false;
+
+        if (!authGuardIdentifier || !useGuardsIdentifier) {
+            return false;
+        }
+
+        for (const decoratorExpression of decoratorExpressions) {
+            traverse(
+                decoratorExpression,
+                {
+                    Identifier(nodePath) {
+                        if (
+                            nodePath.node.name === authGuardIdentifier &&
+                            nodePath?.parentPath?.node?.type === 'CallExpression' &&
+                            nodePath?.parentPath?.parentPath?.node?.type === 'CallExpression' &&
+                            nodePath?.parentPath?.parentPath?.node?.callee?.type === 'Identifier' &&
+                            nodePath?.parentPath?.parentPath?.node?.callee?.name === useGuardsIdentifier &&
+                            nodePath?.parentPath?.parentPath?.parentPath?.node?.type === 'Decorator' &&
+                            nodePath?.parentPath?.parentPath?.node?.arguments?.length > 0
+                        ) {
+                            traverse(
+                                nodePath?.parentPath?.node?.arguments?.[0],
+                                {
+                                    StringLiteral(stringLiteralNodePath) {
+                                        if (stringLiteralNodePath?.node?.value === 'api-key') {
+                                            apiKeyEnabled = true;
+                                        }
+                                    },
+                                },
+                                nodePath?.parentPath?.scope,
+                            );
+                        }
+                    },
+                },
+                scope,
+            );
+        }
+
+        return apiKeyEnabled;
+    };
+    const getApiRequestMappingType = (decorators: Decorator[]) => {
+        let result: ApiRequestMapping;
+
+        if (!Array.isArray(decorators) || !decorators.length) {
+            return null;
+        }
+
+        const restfulMethods = [
+            'Get',
+            'Post',
+            'Put',
+            'Patch',
+            'Delete',
+        ];
+        const requestMappingDecoratorMap = restfulMethods.reduce((result, currentRestfulMethod) => {
+            const localName = ensureImport({
+                identifier: currentRestfulMethod,
+                type: 'ImportSpecifier',
+                addImport: false,
+                sourceFn: () => '@nestjs/common',
+            });
+
+            if (localName) {
+                result[localName] = currentRestfulMethod;
+            }
+
+            return result;
+        }, {} as Record<string, string>);
+
+        for (const decorator of decorators) {
+            if (
+                decorator.expression.type !== 'CallExpression' ||
+                decorator.expression.callee.type !== 'Identifier' ||
+                !Object.keys(requestMappingDecoratorMap).includes(decorator.expression.callee.name) || (
+                    decorator.expression.arguments?.[0] &&
+                    decorator.expression.arguments?.[0]?.type !== 'StringLiteral'
+                )
+            ) {
+                continue;
+            }
+
+            const calleeName = decorator.expression.callee.name;
+            const type = requestMappingDecoratorMap[calleeName].toUpperCase() as ApiRequestMappingType;
+
+            if (!type) {
+                continue;
+            }
+
+            result = {
+                type,
+                path: (decorator.expression.arguments?.[0] as StringLiteral)?.value ?? null,
+            };
+        }
+
+        return result;
+    };
+    const getControllerType = (classDeclaration: ClassDeclaration) => {
+        let result: ApiController;
+        const decorators = classDeclaration?.decorators;
+
+        if (!Array.isArray(decorators) || !decorators.length) {
+            return null;
+        }
+
+        const apiControllerTypeMap = ([
+            {
+                controllerType: 'none',
+                name: 'Controller',
+                type: 'ImportSpecifier',
+                source: '@nestjs/common',
+            },
+            {
+                controllerType: 'admin',
+                name: 'AdminApiController',
+                type: 'ImportSpecifier',
+                source: 'src/common',
+            },
+            {
+                controllerType: 'open',
+                name: 'ApiController',
+                type: 'ImportSpecifier',
+                source: 'src/common',
+            },
+        ] as Array<{
+        type: ImportType;
+        controllerType: ApiControllerType;
+        name: string;
+        source: string;
+    }>).reduce((result, currentItem) => {
+            const localName = ensureImport({
+                identifier: currentItem.name,
+                type: currentItem.type,
+                addImport: false,
+                sourceFn: () => currentItem.source,
+            });
+
+            if (!localName) {
+                return result;
+            }
+
+            result[localName] = currentItem.controllerType;
+
+            return result;
+        }, {} as ApiControllerTypeMap);
+
+        for (const decorator of decorators) {
+            if (
+                decorator.expression.type !== 'CallExpression' ||
+                decorator.expression.callee.type !== 'Identifier' ||
+                !Object.keys(apiControllerTypeMap).includes(decorator.expression.callee.name) || (
+                    decorator.expression.arguments?.[0] &&
+                    decorator.expression.arguments?.[0]?.type !== 'StringLiteral'
+                )
+            ) {
+                continue;
+            }
+
+            const calleeName = decorator.expression.callee.name;
+            const type = apiControllerTypeMap[calleeName];
+
+            if (!type) {
+                continue;
+            }
+
+            result = {
+                type,
+                path: (decorator.expression.arguments?.[0] as StringLiteral)?.value ?? null,
+            };
+        }
+
+        return result;
+    };
+    const getImports = () => {
+        const importDeclarations: ImportDeclaration[] = (ast?.program?.body || [])?.filter((declaration) => declaration.type === 'ImportDeclaration') as ImportDeclaration[];
+        const importItems = importDeclarations.reduce((result: ImportItem[], importDeclaration) => {
+            const sourceValue = importDeclaration?.source?.value;
+            const currentImportItems: ImportItem[] = importDeclaration.specifiers?.map((specifier) => {
+                let imported: string;
+                const local = specifier.local.name;
+
+                switch (specifier.type) {
+                    case 'ImportNamespaceSpecifier':
+                    case 'ImportDefaultSpecifier': {
+                        imported = specifier.local.name;
+                        break;
+                    }
+                    case 'ImportSpecifier': {
+                        if (specifier.imported.type === 'Identifier') {
+                            imported = specifier.imported.name;
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+
+                if (!imported) {
+                    return null;
+                }
+
+                return {
+                    source: sourceValue,
+                    type: specifier.type,
+                    imported,
+                    local,
+                };
+            }).filter((item) => !!item);
+
+            return result.concat(currentImportItems);
+        }, [] as ImportItem[]);
+        return importItems;
+    };
+
+    const importItems = getImports();
     const paramDecoratorMap = [
         'Body',
         'Query',
@@ -627,37 +382,321 @@ const transformCode = async (options: TransformCodeOptions) => {
             {},
         );
 
+    const isDtoInReturnType = (nodePath: NodePath) => {
+        if (!nodePath) {
+            return false;
+        }
+
+        const getAnnotationNodePath = (nodePath: NodePath): NodePath => {
+            if (!nodePath) {
+                return null;
+            }
+
+            if (nodePath?.node?.type === 'TSTypeAnnotation') {
+                return nodePath;
+            }
+
+            return getAnnotationNodePath(nodePath?.parentPath);
+        };
+
+        const annotationNodePath = getAnnotationNodePath(nodePath);
+
+        if (!annotationNodePath) {
+            return false;
+        }
+
+        return (
+            annotationNodePath?.parentPath?.node?.type === 'ClassMethod' || (
+                nodePath?.parentPath?.node?.type === 'TSTypeParameterInstantiation' &&
+                nodePath?.parentPath?.parentPath?.node?.type === 'TSTypeReference' &&
+                nodePath?.parentPath?.parentPath?.node?.typeName?.type === 'Identifier' &&
+                nodePath?.parentPath?.parentPath?.node?.typeName?.name === 'PartialDeep'
+            )
+        );
+    };
+    const ensureImport = (options?: EnsureImportOption) => {
+        const {
+            type,
+            identifier: inputIdentifier,
+            prefix,
+            addImport = true,
+            sourceFn,
+        } = options;
+        const newIdentifier = `${prefix ?? ''}${inputIdentifier}`;
+
+        if (!inputIdentifier || !type || typeof sourceFn !== 'function') {
+            return null;
+        }
+
+        const importSources = ast.program.body
+            .filter((statement) => statement.type === 'ImportDeclaration')
+            .map((importDeclaration: ImportDeclaration) => importDeclaration.source.value)
+            .filter((source) => !!source);
+        const source = sourceFn(importSources);
+
+        if (!source || typeof source !== 'string') {
+            return null;
+        }
+
+        const targetImportDeclaration: ImportDeclaration = ast.program.body.find((statement) => {
+            return statement.type === 'ImportDeclaration' && statement.source.value === source;
+        }) as ImportDeclaration;
+
+        if (!targetImportDeclaration) {
+            if (addImport) {
+                let importDeclaration: ImportDeclaration;
+                switch (type) {
+                    case 'ImportDefaultSpecifier': {
+                        importDeclaration = template.ast(`import ${newIdentifier} from '${source}';`) as ImportDeclaration;
+                        break;
+                    }
+                    case 'ImportSpecifier': {
+                        importDeclaration = template.ast(`import { ${inputIdentifier} as ${newIdentifier} } from '${source}';`) as ImportDeclaration;
+                        break;
+                    }
+                    case 'ImportNamespaceSpecifier': {
+                        importDeclaration = template.ast(`import * as ${newIdentifier} from '${source}';`) as ImportDeclaration;
+                        break;
+                    }
+                }
+
+                ast.program.body.unshift(importDeclaration);
+
+                return newIdentifier;
+            } else {
+                return null;
+            }
+        }
+
+        let localIdentifier: string;
+
+        for (const specifier of targetImportDeclaration.specifiers) {
+            if (
+                (type === 'ImportDefaultSpecifier' || type === 'ImportNamespaceSpecifier') &&
+                specifier.type === type &&
+                specifier.local.name === inputIdentifier
+            ) {
+                localIdentifier = inputIdentifier;
+                break;
+            }
+
+            if (
+                type === 'ImportSpecifier' &&
+                specifier.type === 'ImportSpecifier' &&
+                specifier.imported?.type === 'Identifier' &&
+                specifier.imported.name === inputIdentifier
+            ) {
+                localIdentifier = specifier.local.name;
+                break;
+            }
+        }
+
+        if (!localIdentifier) {
+            if (addImport && type === 'ImportSpecifier') {
+                targetImportDeclaration.specifiers.push(importSpecifier(
+                    identifier(newIdentifier),
+                    identifier(inputIdentifier),
+                ));
+                return newIdentifier;
+            } else {
+                return null;
+            }
+        } else {
+            return localIdentifier;
+        }
+    };
+    const getReturnDto = (classMethod: ClassMethod, scope?: Scope) => {
+        if (!classMethod || classMethod.type !== 'ClassMethod') {
+            return null;
+        }
+
+        const returnTypeStatement: TSTypeAnnotation = classMethod?.returnType as TSTypeAnnotation;
+
+        if (returnTypeStatement?.type !== 'TSTypeAnnotation') {
+            return null;
+        }
+
+        try {
+            let dtoClassName: string;
+            traverse(
+                classMethod,
+                {
+                    Identifier(nodePath) {
+                        if (importedDtoItemMap[nodePath.node.name]) {
+                            dtoClassName = nodePath.node.name;
+                            nodePath.stop();
+                        }
+                    },
+                },
+                scope,
+            );
+            return dtoClassName;
+        } catch (e) {
+            return null;
+        }
+    };
+    const lintCode = async (
+        code: string,
+        options: LinterOptions = {},
+    ): Promise<string> => {
+        const {
+            cwd: userSpecifiedCwd,
+            prePlugins = [],
+            postPlugins = [],
+            overrideConfig = {},
+            ...otherESLintConfig
+        } = options;
+        let eslintConfigFilePath = userSpecifiedCwd;
+
+        if (!eslintConfigFilePath) {
+            const eslintConfigPaths = [
+                path.resolve(__dirname, '../.eslintrc.js'),
+            ];
+            const currentProjectESLintConfig = cosmiconfigSync('eslint').search();
+            eslintConfigFilePath = currentProjectESLintConfig?.filepath
+                ? currentProjectESLintConfig.filepath
+                : eslintConfigPaths.find((pathname) => fs.existsSync(pathname));
+        }
+
+        if (!eslintConfigFilePath) {
+            return code;
+        }
+
+        const eslint = new ESLint({
+            ...otherESLintConfig,
+            allowInlineConfig: true,
+            cwd: path.dirname(eslintConfigFilePath),
+            overrideConfig: _.merge({}, {
+                rules: {
+                    'array-element-newline': ['error', {
+                        'multiline': true,
+                        'minItems': 2,
+                    }],
+                    'array-bracket-newline': ['error', {
+                        'multiline': true,
+                        'minItems': 2,
+                    }],
+                    'object-curly-newline': ['error', {
+                        'ObjectExpression': 'always',
+                        'ObjectPattern': 'always',
+                        'ImportDeclaration': {
+                            'multiline': true,
+                            'minProperties': 2,
+                        },
+                        'ExportDeclaration': {
+                            'multiline': true,
+                            'minProperties': 2,
+                        },
+                    }],
+                    'object-curly-spacing': ['error', 'always'],
+                    'object-property-newline': ['error', { allowAllPropertiesOnSameLine: false }],
+                    'no-undef': 'off',
+                    'no-unused-vars': 'off', // or "@typescript-eslint/no-unused-vars": "off",
+                    'unused-imports/no-unused-imports': 'error',
+                    'unused-imports/no-unused-vars': [
+                        'warn',
+                        {
+                            'vars': 'all',
+                            'varsIgnorePattern': '^_',
+                            'args': 'after-used',
+                            'argsIgnorePattern': '^_',
+                        },
+                    ],
+                },
+            }, overrideConfig),
+            fix: true,
+        });
+        let rawCode: string = code;
+
+        for (const prePlugin of prePlugins) {
+            rawCode = await prePlugin(rawCode, eslintConfigFilePath);
+        }
+
+        rawCode = _.get(await eslint.lintText(rawCode), '[0].output') as string || rawCode;
+
+        for (const postPlugin of postPlugins) {
+            rawCode = await postPlugin(rawCode, eslintConfigFilePath);
+        }
+
+        return rawCode;
+    };
+
+    ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
+    ([
+        {
+            identifier: 'PartialDeep',
+            type: 'ImportSpecifier',
+            sourceFn: () => '@mtrxjs/basics/dist/common/common.interface',
+        },
+        {
+            identifier: 'CUSTOM_DESERIALIZER',
+            type: 'ImportSpecifier',
+            sourceFn: () => '@mtrxjs/basics/dist/common/common.constant',
+        },
+        {
+            identifier: 'request',
+            type: 'ImportDefaultSpecifier',
+            sourceFn: () => path.relative(path.dirname(options.fileAbsolutePath), path.resolve(options.workDir, './src/request')),
+        },
+    ] as Omit<EnsureImportOption, 'body'>[]).forEach((ensureImportItem) => {
+        ensureImport(ensureImportItem);
+    });
+
+    const exportDefaultController = Symbol('export.default');
+    const controllerDeclarationTypeMap: Record<string | symbol, {
+        name: string;
+        type: ApiControllerType;
+    }> = {};
+
     traverse(ast, {
-        ImportDeclaration(nodePath2) {
-            if (nodePath2?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
-                nodePath2.node.source.value = nodePath2.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
+        ImportDeclaration(nodePath1) {
+            if (nodePath1?.node?.source?.value?.startsWith('@matrindex/build-essential')) {
+                nodePath1.node.source.value = nodePath1.node.source.value.replace(/^\@matrindex\/build-essential/g, '@mtrxjs/basics');
             }
         },
         ClassDeclaration(nodePath1) {
             const controllerApiKeyEnabled = checkApiKeyEnabled(
-                importItems,
                 nodePath1?.node?.decorators,
                 nodePath1.scope,
             );
-            const apiController = getControllerType(ast.program.body, nodePath1?.node) || {
+            const apiController = getControllerType(nodePath1?.node) || {
                 type: null,
                 path: '/',
             };
 
-            let pathPrefix = '';
+            let pathPrefix: string;
+            const versionPath = `/v${options.version ?? 1}`;
 
             switch (apiController.type) {
                 case 'admin':
-                    pathPrefix = '/admin_api';
+                    pathPrefix = '/admin_api' + versionPath;
                     break;
                 case 'open':
-                    pathPrefix = '/api';
+                    pathPrefix = '/api' + versionPath;
+                    break;
+                case 'none':
+                    pathPrefix = '';
                     break;
                 default:
                     break;
             }
 
-            const basePathnamePropertyExpression = classProperty(identifier('basePathname'), stringLiteral(pathPrefix + `/v${options.version ?? 1}` + apiController.path));
+            if (apiController.type) {
+                let controllerDeclarationName: string | symbol;
+
+                if (nodePath1.node?.id?.name) {
+                    controllerDeclarationName = nodePath1.node?.id.name;
+                } else if (nodePath1.parentPath.node?.type === 'ExportDefaultDeclaration') {
+                    controllerDeclarationName = exportDefaultController;
+                }
+
+                controllerDeclarationTypeMap[controllerDeclarationName] = {
+                    type: apiController.type,
+                    name: _.camelCase(apiController.path.replace(/^\//g, '').split('/').join('-')),
+                };
+            }
+
+            const basePathnamePropertyExpression = classProperty(identifier('basePathname'), stringLiteral(pathPrefix + apiController.path));
 
             basePathnamePropertyExpression.accessibility = 'protected';
             (nodePath1?.node as ClassDeclaration).body.body.unshift(basePathnamePropertyExpression);
@@ -672,7 +711,7 @@ const transformCode = async (options: TransformCodeOptions) => {
                         }
 
                         if (!controllerApiKeyEnabled) {
-                            const methodApiKeyEnabled = checkApiKeyEnabled(importItems, nodePath2?.node?.decorators, nodePath2?.scope);
+                            const methodApiKeyEnabled = checkApiKeyEnabled(nodePath2?.node?.decorators, nodePath2?.scope);
 
                             if (!methodApiKeyEnabled) {
                                 nodePath2.remove();
@@ -680,7 +719,7 @@ const transformCode = async (options: TransformCodeOptions) => {
                             }
                         }
 
-                        const apiRequestMapping = getApiRequestMappingType(ast.program.body, nodePath2?.node?.decorators);
+                        const apiRequestMapping = getApiRequestMappingType(nodePath2?.node?.decorators);
 
                         if (!apiRequestMapping) {
                             nodePath2.remove();
@@ -860,32 +899,87 @@ const transformCode = async (options: TransformCodeOptions) => {
                 },
                 nodePath1.scope,
             );
+        },
+    });
 
-            ([
-                {
-                    identifier: 'PartialDeep',
+    const exportedControllers: ExportedController[] = [];
+
+    traverse(ast, {
+        ExportNamedDeclaration(nodePath1) {
+            if (
+                nodePath1.node?.declaration?.type === 'ClassDeclaration' &&
+                Object.keys(controllerDeclarationTypeMap).includes(nodePath1.node?.declaration?.id?.name)
+            ) {
+                const controllerName = nodePath1.node?.declaration?.id?.name;
+                exportedControllers.push({
+                    local: controllerName,
+                    exported: controllerName,
                     type: 'ImportSpecifier',
-                    sourceFn: () => '@mtrxjs/basics/dist/common/common.interface',
-                },
-                {
-                    identifier: 'CUSTOM_DESERIALIZER',
-                    type: 'ImportSpecifier',
-                    sourceFn: () => '@mtrxjs/basics/dist/common/common.constant',
-                },
-            ] as Omit<EnsureImportOption, 'body'>[]).forEach((ensureImportItem) => {
-                ensureImport({
-                    body: ast.program.body,
-                    ...ensureImportItem,
+                    controllerType: controllerDeclarationTypeMap?.[controllerName]?.type,
+                    name: controllerDeclarationTypeMap?.[controllerName]?.name,
                 });
-            });
-
-            ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
+            } else if (nodePath1.node?.specifiers?.length > 0) {
+                for (const specifier of nodePath1.node.specifiers) {
+                    if (
+                        specifier.type === 'ExportSpecifier' &&
+                        Object.keys(controllerDeclarationTypeMap).includes(specifier.local.name) &&
+                        specifier.exported.type === 'Identifier'
+                    ) {
+                        exportedControllers.push({
+                            local: specifier.local.name,
+                            exported: specifier.exported.name,
+                            type: 'ImportSpecifier',
+                            controllerType: controllerDeclarationTypeMap?.[specifier.local.name]?.type,
+                            name: controllerDeclarationTypeMap?.[specifier.local.name]?.name,
+                        });
+                    }
+                }
+            }
+        },
+        ExportDefaultDeclaration(nodePath1) {
+            if (nodePath1?.node?.declaration?.type === 'ClassDeclaration') {
+                if (
+                    !nodePath1?.node?.declaration?.id &&
+                    Boolean(controllerDeclarationTypeMap[exportDefaultController])
+                ) {
+                    exportedControllers.push({
+                        local: null,
+                        exported: null,
+                        name: controllerDeclarationTypeMap[exportDefaultController]?.name,
+                        controllerType: controllerDeclarationTypeMap[exportDefaultController]?.type,
+                        type: 'ImportDefaultSpecifier',
+                    });
+                } else {
+                    const controllerName = nodePath1.node.declaration.id.name;
+                    exportedControllers.push({
+                        local: controllerName,
+                        exported: controllerName,
+                        name: controllerDeclarationTypeMap[controllerName]?.name,
+                        controllerType: controllerDeclarationTypeMap[controllerName]?.type,
+                        type: 'ImportDefaultSpecifier',
+                    });
+                }
+            } else if (
+                nodePath1.node.declaration.type === 'Identifier' &&
+                Boolean(controllerDeclarationTypeMap[nodePath1.node.declaration.name])
+            ) {
+                const controllerName = nodePath1.node.declaration.name;
+                exportedControllers.push({
+                    local: controllerName,
+                    exported: controllerName,
+                    name: controllerDeclarationTypeMap[controllerName]?.name,
+                    controllerType: controllerDeclarationTypeMap[controllerName]?.type,
+                    type: 'ImportDefaultSpecifier',
+                });
+            }
         },
     });
 
     return await lintCode(generate(ast)?.code);
 };
 
-transformCode({
+parseController({
     version: '1',
+    workDir: '/work',
+    fileAbsolutePath: '/work/src/controllers/subscription.controller.ts',
 }).then((code) => console.log(code));
