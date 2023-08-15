@@ -31,6 +31,7 @@ import {
 import template from '@babel/template';
 import { ESLint } from 'eslint';
 import { cosmiconfigSync } from 'cosmiconfig';
+import { PathSchemeContext } from './interfaces';
 
 export const parseAst = (content) => {
     return parse(content, {
@@ -246,46 +247,49 @@ const parseController = async (options: TransformCodeOptions) => {
             return null;
         }
 
-        const apiControllerTypeMap = ([
-            {
-                controllerType: 'none',
-                name: 'Controller',
-                type: 'ImportSpecifier',
-                source: '@nestjs/common',
-            },
-            {
-                controllerType: 'admin',
-                name: 'AdminApiController',
-                type: 'ImportSpecifier',
-                source: 'src/common',
-            },
-            {
-                controllerType: 'open',
-                name: 'ApiController',
-                type: 'ImportSpecifier',
-                source: 'src/common',
-            },
-        ] as Array<{
-        type: ImportType;
-        controllerType: ApiControllerType;
-        name: string;
-        source: string;
-    }>).reduce((result, currentItem) => {
-            const localName = ensureImport({
-                identifier: currentItem.name,
-                type: currentItem.type,
-                addImport: false,
-                sourceFn: () => currentItem.source,
-            });
+        const apiControllerTypeMap = (
+            [
+                {
+                    controllerType: 'none',
+                    name: 'Controller',
+                    type: 'ImportSpecifier',
+                    source: '@nestjs/common',
+                },
+                {
+                    controllerType: 'admin',
+                    name: 'AdminApiController',
+                    type: 'ImportSpecifier',
+                    source: 'src/common',
+                },
+                {
+                    controllerType: 'open',
+                    name: 'ApiController',
+                    type: 'ImportSpecifier',
+                    source: 'src/common',
+                },
+            ] as Array<{
+                type: ImportType;
+                controllerType: ApiControllerType;
+                name: string;
+                source: string;
+            }>
+        )
+            .reduce((result, currentItem) => {
+                const localName = ensureImport({
+                    identifier: currentItem.name,
+                    type: currentItem.type,
+                    addImport: false,
+                    sourceFn: () => currentItem.source,
+                });
 
-            if (!localName) {
+                if (!localName) {
+                    return result;
+                }
+
+                result[localName] = currentItem.controllerType;
+
                 return result;
-            }
-
-            result[localName] = currentItem.controllerType;
-
-            return result;
-        }, {} as ApiControllerTypeMap);
+            }, {} as ApiControllerTypeMap);
 
         for (const decorator of decorators) {
             if (
@@ -1090,3 +1094,22 @@ parseController({
     workDir: '/work',
     fileAbsolutePath: '/work/src/controllers/subscription.controller.ts',
 }).then((code) => console.log(code));
+
+///
+
+export const controllerPathScheme = (context: PathSchemeContext) => {
+    if (
+        context?.decoratorExpression?.type !== 'CallExpression' ||
+        context?.decoratorExpression?.callee?.type !== 'Identifier' ||
+        (
+            context?.decoratorExpression?.arguments?.[0] &&
+            context?.decoratorExpression?.arguments?.[0]?.type !== 'StringLiteral'
+        )
+    ) {
+        return null;
+    }
+
+    return (context?.decoratorExpression?.arguments?.[0] as StringLiteral)?.value ?? null;
+};
+
+export const methodPathScheme = controllerPathScheme;

@@ -1,11 +1,20 @@
 import {
     CallExpression,
+    // ClassMethod,
     Expression,
     Identifier,
     TSTypeAnnotation,
+    File,
+    Decorator,
 } from '@babel/types';
 import { DeclarationFileType } from './declaration-file-type.enum';
-import { EnsureImportOption } from './utils';
+import { ClassTransformOptions } from 'class-transformer';
+import { AxiosRequestConfig } from 'axios';
+import {
+    // NodePath,
+    Scope,
+} from '@babel/traverse';
+import { ParseResult } from '@babel/parser';
 
 export interface SDKMakerOptions {
     name: string;
@@ -44,18 +53,46 @@ export type Declaration = DTOClassDeclaration | EnumDeclaration;
 
 ///
 
-export interface NestSDKMakerOptions {
+export interface CodegenOptions {
+    baseURL: string;
     outputDir: string;
     workDir: string;
-    baseURL: string;
+    authGuardWhiteList: string[];
+    classTransformOptions?: ClassTransformOptions;
+    controllerGlobPatterns?: string[];
     customizer?: Customizer;
+    requestOptions?: Omit<AxiosRequestConfig, 'url' | 'method' | 'baseURL'>;
     version?: string;
     versioning?: boolean;
+    getAuthGuardTypes?: GetAuthGuardTypes;
+    getReturnDto?: GetReturnDTO;
 }
 
+export interface GetReturnDTOContext {
+    returnType: TSTypeAnnotation;
+    scope: Scope;
+    dtoIdentifiers: string[];
+}
+
+export interface GetAuthGuardTypesContext {
+    decorators: Decorator[];
+    scope: Scope;
+    importItems: ImportItem[];
+}
+
+export type GetAuthGuardTypes = (context: GetAuthGuardTypesContext) => string[];
+export type GetReturnDTO = (context: GetReturnDTOContext) => string;
 export type ImportType = 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportNamespaceSpecifier';
 export type HTTPMethodType = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type DecoratorExpression = CallExpression | Identifier;
+
+export interface EnsureImportOption {
+    ast: ParseResult<File>;
+    type: ImportType;
+    sourceFn: (sources: string[]) => string;
+    identifier?: string;
+    addImport?: boolean;
+}
 
 export interface ImportItem {
     imported: string;
@@ -64,25 +101,24 @@ export interface ImportItem {
     type: ImportType;
 }
 
-export interface PathGetterData extends Required<Pick<NestSDKMakerOptions, 'versioning' | 'version'>> {
+export interface PathSchemeContext extends Required<Pick<CodegenOptions, 'versioning' | 'version'>> {
     decoratorExpression: DecoratorExpression;
 }
 
-export type PathGetter = (data: PathGetterData) => string;
+export type PathScheme = (context: PathSchemeContext) => string;
 
-export interface CustomControllerDecorator extends ImportItem {
-    controllerType: string;
-    pathGetter: PathGetter;
+export interface CustomControllerDecorator extends Omit<ImportItem, 'local'> {
+    pathScheme?: PathScheme;
 }
 
-export interface CustomHTTPMethodDecorator extends ImportItem {
-    pathGetter: PathGetter;
+export interface CustomHTTPMethodDecorator extends Omit<ImportItem, 'local'> {
+    pathScheme?: PathScheme;
 }
 
 export type CustomHTTPMethodDecoratorMap = Partial<Record<HTTPMethodType, CustomHTTPMethodDecorator>>;
 
 export interface Customizer {
-    controllerDecorators?: CustomControllerDecorator[];
-    httpMethodDecoratorMap?: CustomHTTPMethodDecoratorMap;
-    ensureImports?: EnsureImportOption[];
+    controllers?: CustomControllerDecorator[];
+    httpMethodMap?: CustomHTTPMethodDecoratorMap;
+    ensureImports?: Omit<EnsureImportOption, 'ast'>[];
 }
