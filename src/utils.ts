@@ -63,7 +63,7 @@ export type ImportType = 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportN
 
 export interface EnsureImportOption {
     type: ImportType;
-    identifier: string;
+    identifier?: string;
     addImport?: boolean;
     sourceFn: (sources: string[]) => string;
 }
@@ -423,7 +423,7 @@ const parseController = async (options: TransformCodeOptions) => {
             sourceFn,
         } = options;
 
-        if (!inputIdentifier || !type || typeof sourceFn !== 'function') {
+        if (!type || typeof sourceFn !== 'function') {
             return null;
         }
 
@@ -435,7 +435,7 @@ const parseController = async (options: TransformCodeOptions) => {
                     nodePath1.node,
                     {
                         Identifier(nodePath2) {
-                            if (nodePath2?.node?.name === inputIdentifier) {
+                            if (inputIdentifier && nodePath2?.node?.name === inputIdentifier) {
                                 const randomPrefix = new Array(8).fill('').map(() => {
                                     return 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)];
                                 }).join('');
@@ -457,6 +457,18 @@ const parseController = async (options: TransformCodeOptions) => {
 
         if (!source || typeof source !== 'string') {
             return null;
+        }
+
+        if (!inputIdentifier) {
+            const targetImportDeclaration: ImportDeclaration = ast.program.body.find((statement) => {
+                return statement.type === 'ImportDeclaration' && statement.source.value === source;
+            }) as ImportDeclaration;
+
+            if (!targetImportDeclaration) {
+                ast.program.body.unshift(template.ast(`import '${source}'`) as ImportDeclaration);
+            }
+
+            return;
         }
 
         const targetImportDeclaration: ImportDeclaration = ast.program.body.find((statement) => {

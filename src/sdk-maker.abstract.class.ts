@@ -25,7 +25,7 @@ import {
     TSTypeAnnotation,
 } from '@babel/types';
 
-export abstract class SDKMaker {
+export class Maker {
     protected readonly declarations: Declaration[] = [];
     protected basePackageDistDirectory: string;
     protected cwd: string = process.cwd();
@@ -68,6 +68,11 @@ export abstract class SDKMaker {
         this.templateDir = path.resolve(this.context.absolutePath, this.options.templateDir || './templates');
         this.parseDeclarations();
     }
+
+    public build() {}
+    public prePublish() {}
+    public publish() {}
+    public postPublish() {}
 
     protected getTemplate(pathname: string) {
         try {
@@ -228,9 +233,4 @@ export abstract class SDKMaker {
             }
         }
     }
-
-    public abstract build(): Promise<void>;
-    public abstract prePublish(): Promise<void>;
-    public abstract publish(): Promise<void>;
-    public abstract postPublish(): Promise<void>;
 }

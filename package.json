@@ -1,12 +1,12 @@
 {
-    "name": "@matrindex/sdk-maker",
+    "name": "@blitzesty/nestjs-sdk-maker",
     "version": "0.0.1",
-    "description": "SDK automatic maker for MatrIndex API",
+    "description": "SDK automatic maker for Nestjs",
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1"
     },
     "bin": {
-        "matrindex-sdk-make": "./bin/make.js"
+        "make-nestjs-sdk": "./bin/make.js"
     },
     "files": [
         "bin",
@@ -15,14 +15,14 @@
     ],
     "repository": {
         "type": "git",
-        "url": "git@github.com:matrindex/matrindex-sdk-maker.git"
+        "url": "git@github.com:blitzesty/nestjs-sdk-maker.git"
     },
     "author": "",
     "license": "MIT",
     "bugs": {
-        "url": "https://github.com/matrindex/matrindex-sdk-maker/issues"
+        "url": "https://github.com/blitzesty/nestjs-sdk-maker/issues"
     },
-    "homepage": "https://github.com/matrindex/matrindex-sdk-maker#readme",
+    "homepage": "https://github.com/blitzesty/nestjs-sdk-maker#readme",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "dependencies": {
