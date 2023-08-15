@@ -57,7 +57,7 @@ export interface CodegenOptions {
     baseURL: string;
     outputDir: string;
     workDir: string;
-    authGuardWhiteList: string[];
+    authGuardWhiteList?: string[];
     classTransformOptions?: ClassTransformOptions;
     controllerGlobPatterns?: string[];
     customizer?: Customizer;
@@ -89,7 +89,8 @@ export type DecoratorExpression = CallExpression | Identifier;
 export interface EnsureImportOption {
     ast: ParseResult<File>;
     type: ImportType;
-    sourceFn: (sources: string[]) => string;
+    source: string | RegExp | ((sources: string[]) => string);
+    actualSource: string;
     identifier?: string;
     addImport?: boolean;
 }
@@ -121,4 +122,20 @@ export interface Customizer {
     controllers?: CustomControllerDecorator[];
     httpMethodMap?: CustomHTTPMethodDecoratorMap;
     ensureImports?: Omit<EnsureImportOption, 'ast'>[];
+}
+
+export interface ControllerClassExport {
+    exportedName: string;
+    importType: ImportType;
+    localName: string;
+    controller: CustomControllerDecorator;
+}
+
+export type EnsuredImportMap = Record<string, ImportItem>;
+
+export interface ControllerFileScanResult {
+    ast: ParseResult<File>;
+    code: string;
+    exports: ControllerClassExport[];
+    ensuredImportMap: EnsuredImportMap;
 }

@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as _ from 'lodash';
 import { DeclarationFileType } from './declaration-file-type.enum';
 import * as fs from 'fs-extra';
-import { parseAst } from './utils';
+import { parseAst } from './common';
 import {
     ClassBody,
     ClassDeclaration,

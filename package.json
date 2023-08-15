@@ -11,6 +11,8 @@
     "files": [
         "bin",
         "dist",
+        ".eslintrc.js",
+        ".gitignore",
         "README.md"
     ],
     "repository": {
