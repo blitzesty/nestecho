@@ -24,20 +24,15 @@ export const defaultOptions = {
             'ImportSpecifier',
             'ImportDefaultSpecifier',
         ],
-        sourceMatcher: /\.dto$/g,
+        sourceMatcher: '.dto$',
     },
     outputDir: './sdk',
+    responseHandlers: [],
     sdkOptionsInterfaceDescriptor: {
         type: 'ImportSpecifier',
         identifier: 'SDKOptions',
-        sourceMatcher: /^\@blitzesty\/nestecho/g,
+        sourceMatcher: '^@blitzesty/nestecho/*',
         source: '@blitzesty/nestecho/dist/sdk-options.interface',
     },
     versioning: false,
-    workDir: process.cwd(),
-    requestOptions: () => {
-        return {
-            timeout: 60000,
-        };
-    },
-} as Partial<Options>;
+} as Required<Omit<Options, 'apiBaseURL' | 'packageName'>>;

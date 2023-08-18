@@ -75,6 +75,7 @@ export interface RequestOptionsContext {
 
 export interface Options {
     apiBaseURL: string;
+    packageName: string;
     appEntry?: string;
     appModule?: AppModuleOptions;
     classTransformOptions?: ClassTransformOptions;
@@ -82,11 +83,10 @@ export interface Options {
     controllerPatterns?: string[];
     dtoImportMatcher?: DTOImportMatcher;
     outputDir?: string;
-    sdkOptionsInterfaceDescriptor?: Required<Omit<EnsureImportInputOptions, 'addImport'>>;
+    responseHandlers?: EnsureImportOptions[];
+    sdkOptionsInterfaceDescriptor?: Required<Omit<EnsureImportOptions, 'addImport' | 'sourceMatcher'> & { sourceMatcher: string }>;
     version?: string;
     versioning?: boolean;
-    workDir?: string;
-    requestOptions?: (context: RequestOptionsContext) => RequestOptions;
 }
 
 export interface AppModuleOptions {
@@ -95,11 +95,11 @@ export interface AppModuleOptions {
     importType?: ImportType;
 }
 
-export type DTOSourceMatcherFunction = (source: string) => boolean;
+// export type DTOSourceMatcherFunction = (source: string) => boolean;
 
 export interface DTOImportMatcher {
     importType: ImportType[];
-    sourceMatcher: RegExp | DTOSourceMatcherFunction;
+    sourceMatcher: string;
 }
 
 export type RequestOptions = Omit<AxiosRequestConfig, 'url' | 'method' | 'baseURL'>;
@@ -130,7 +130,7 @@ export interface EnsureImportOptions {
     addImport?: boolean;
 }
 
-export type EnsureImportInputOptions = Omit<EnsureImportOptions, 'ast'>;
+// export type EnsureImportInputOptions = Omit<EnsureImportOptions, 'ast'>;
 
 export interface ImportItem {
     imported: string;
