@@ -1,39 +1,65 @@
 import {
+    File,
     ImportDeclaration,
-    // StringLiteral,
     identifier,
     importSpecifier,
 } from '@babel/types';
 import {
     EnsureImportOptions,
-    // PathSchemeContext,
+    ImportItem,
 } from '../interfaces/common.interface';
 import traverse from '@babel/traverse';
 import template from '@babel/template';
-import { parse } from '@babel/parser';
+import { ParseResult } from '@babel/parser';
+import generate from '@babel/generator';
 
 export class AstUtil {
-    // public methodPathScheme = this.controllerPathScheme;
+    public constructor(private ast: ParseResult<File>) {}
 
-    // public controllerPathScheme(context: PathSchemeContext) {
-    //     if (
-    //         context?.decoratorExpression?.type !== 'CallExpression' ||
-    //         context?.decoratorExpression?.callee?.type !== 'Identifier' ||
-    //         (
-    //             context?.decoratorExpression?.arguments?.[0] &&
-    //             context?.decoratorExpression?.arguments?.[0]?.type !== 'StringLiteral'
-    //         )
-    //     ) {
-    //         return null;
-    //     }
+    public getImports() {
+        const importDeclarations: ImportDeclaration[] = (this.ast?.program?.body || [])?.filter((declaration) => declaration.type === 'ImportDeclaration') as ImportDeclaration[];
+        const importItems = importDeclarations.reduce((result: ImportItem[], importDeclaration) => {
+            const sourceValue = importDeclaration?.source?.value;
+            const currentImportItems: ImportItem[] = importDeclaration.specifiers?.map((specifier) => {
+                let imported: string;
+                const local = specifier.local.name;
 
-    //     return (context?.decoratorExpression?.arguments?.[0] as StringLiteral)?.value ?? null;
-    // };
+                switch (specifier.type) {
+                    case 'ImportNamespaceSpecifier':
+                    case 'ImportDefaultSpecifier': {
+                        imported = specifier.local.name;
+                        break;
+                    }
+                    case 'ImportSpecifier': {
+                        if (specifier.imported.type === 'Identifier') {
+                            imported = specifier.imported.name;
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+
+                if (!imported) {
+                    return null;
+                }
+
+                return {
+                    source: sourceValue,
+                    type: specifier.type,
+                    imported,
+                    local,
+                };
+            }).filter((item) => !!item);
+
+            return result.concat(currentImportItems);
+        }, [] as ImportItem[]);
+        return importItems;
+    };
 
     public ensureImport(options?: EnsureImportOptions) {
         const {
             type,
-            ast,
             identifier: inputIdentifier,
             addImport = true,
             sourceMatcher: inputSource,
@@ -46,7 +72,7 @@ export class AstUtil {
 
         let newIdentifier = inputIdentifier;
 
-        traverse(ast, {
+        traverse(this.ast, {
             ImportDeclaration(nodePath1) {
                 traverse(
                     nodePath1.node,
@@ -66,11 +92,11 @@ export class AstUtil {
             },
         });
 
-        const importSources = ast.program.body
+        const importSources = this.ast.program.body
             .filter((statement) => statement.type === 'ImportDeclaration')
             .map((importDeclaration: ImportDeclaration) => importDeclaration.source.value)
             .filter((source) => !!source);
-        const targetImportDeclaration: ImportDeclaration = ast.program.body.find((statement) => {
+        const targetImportDeclaration: ImportDeclaration = this.ast.program.body.find((statement) => {
             if (statement.type !== 'ImportDeclaration') {
                 return false;
             }
@@ -89,7 +115,7 @@ export class AstUtil {
         }) as ImportDeclaration;
 
         if (!inputIdentifier && !targetImportDeclaration) {
-            ast.program.body.unshift(template.ast(`import '${inputActualSource}'`) as ImportDeclaration);
+            this.ast.program.body.unshift(template.ast(`import '${inputActualSource}'`) as ImportDeclaration);
             return;
         }
 
@@ -111,7 +137,7 @@ export class AstUtil {
                     }
                 }
 
-                ast.program.body.unshift(importDeclaration);
+                this.ast.program.body.unshift(importDeclaration);
 
                 return newIdentifier;
             } else {
@@ -157,24 +183,7 @@ export class AstUtil {
         return [localIdentifier, targetImportDeclaration.source.value];
     };
 
-    public parseAst(content) {
-        return parse(content, {
-            sourceType: 'module',
-            plugins: [
-                'jsx',
-                'typescript',
-                'decorators-legacy',
-                'dynamicImport',
-                'throwExpressions',
-                'objectRestSpread',
-                'optionalChaining',
-                'classPrivateMethods',
-                'classPrivateProperties',
-                'classProperties',
-                'classStaticBlock',
-                'exportDefaultFrom',
-                'exportNamespaceFrom',
-            ],
-        });
-    };
+    public getCode() {
+        return generate(this.ast)?.code;
+    }
 }

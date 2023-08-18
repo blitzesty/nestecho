@@ -1,12 +1,12 @@
-import {
-    // CallExpression,
-    // ClassMethod,
-    // Expression,
-    // Identifier,
-    // TSTypeAnnotation,
-    File,
-    // Decorator,
-} from '@babel/types';
+// import {
+// CallExpression,
+// ClassMethod,
+// Expression,
+// Identifier,
+// TSTypeAnnotation,
+// File,
+// Decorator,
+// } from '@babel/types';
 // import { DeclarationFileType } from './declaration-file-type.enum';
 import { ClassTransformOptions } from 'class-transformer';
 import { AxiosRequestConfig } from 'axios';
@@ -14,7 +14,7 @@ import { AxiosRequestConfig } from 'axios';
 // NodePath,
 // Scope,
 // } from '@babel/traverse';
-import { ParseResult } from '@babel/parser';
+// import { ParseResult } from '@babel/parser';
 
 // export interface SDKMakerOptions {
 //     name: string;
@@ -78,7 +78,7 @@ export interface Options {
     appEntry?: string;
     appModule?: AppModuleOptions;
     classTransformOptions?: ClassTransformOptions;
-    cleanupDirs?: string[];
+    cleanups?: string[];
     controllerPatterns?: string[];
     dtoImportMatcher?: DTOImportMatcher;
     outputDir?: string;
@@ -95,9 +95,11 @@ export interface AppModuleOptions {
     importType?: ImportType;
 }
 
+export type DTOSourceMatcherFunction = (source: string) => boolean;
+
 export interface DTOImportMatcher {
     importType: ImportType[];
-    sourceMatcher: RegExp;
+    sourceMatcher: RegExp | DTOSourceMatcherFunction;
 }
 
 export type RequestOptions = Omit<AxiosRequestConfig, 'url' | 'method' | 'baseURL'>;
@@ -121,7 +123,6 @@ export type ImportType = 'ImportSpecifier' | 'ImportDefaultSpecifier' | 'ImportN
 // export type DecoratorExpression = CallExpression | Identifier;
 
 export interface EnsureImportOptions {
-    ast: ParseResult<File>;
     type: ImportType;
     sourceMatcher: string | RegExp | ((sources: string[]) => string);
     source: string;

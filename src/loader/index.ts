@@ -1,11 +1,21 @@
 /* eslint-disable @typescript-eslint/no-invalid-this */
-
 import { defaultOptions } from '../constants';
 import * as _ from 'lodash';
 import { Options } from '../interfaces/common.interface';
 import * as path from 'path';
-// import { minimatch } from 'minimatch';
-// import { MatchUtil } from '../utils/match-util';
+import {
+    AstUtil,
+    MatchUtil,
+    parseAst,
+} from '../utils';
+import { FilePath } from '../decorators';
+import traverse from '@babel/traverse';
+import {
+    callExpression,
+    decorator,
+    identifier,
+    stringLiteral,
+} from '@babel/types';
 
 export default function(source) {
     const callback = this.async();
@@ -28,7 +38,7 @@ export default function(source) {
     } as Required<Pick<Options, 'controllerPatterns' | 'workDir' | 'appEntry' | 'appModule'>>;
     const requestAbsolutePath = this.resourcePath;
     const requestRelativePath = path.relative(options.workDir, requestAbsolutePath);
-    // const matchUtil = new MatchUtil();
+    const matchUtil = new MatchUtil();
 
     try {
         (async function() {
@@ -67,6 +77,36 @@ export default function(source) {
                 ].join('\n');
 
                 return callback(null, code);
+            } else if (matchUtil.match(options.controllerPatterns, requestRelativePath)) {
+                const ast = parseAst(source);
+                const astUtil = new AstUtil(ast);
+                const filePathDecoratorSource = '@blitzesty/nestecho/dist/decorators/filepath.decorator';
+                const [filePathIdentifier] = astUtil.ensureImport({
+                    addImport: true,
+                    source: filePathDecoratorSource,
+                    sourceMatcher: /^\@blitzesty\/nestecho/g,
+                    identifier: FilePath.name,
+                    type: 'ImportSpecifier',
+                });
+
+                traverse(ast, {
+                    ClassDeclaration(nodePath) {
+                        if (!Array.isArray(nodePath.node.decorators)) {
+                            nodePath.node.decorators = [];
+                        }
+
+                        nodePath.node.decorators.push(decorator(
+                            callExpression(
+                                identifier(filePathIdentifier),
+                                [
+                                    stringLiteral(filePathDecoratorSource),
+                                ],
+                            ),
+                        ));
+                    },
+                });
+
+                return callback(null, astUtil.getCode());
             }
 
             callback(null, source);

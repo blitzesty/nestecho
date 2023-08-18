@@ -1,6 +1,7 @@
 import { Options } from './interfaces/common.interface';
 
 export const CUSTOM_DESERIALIZER = 'nestecho:metadata:custom_deserializer';
+export const FILE_PATH = 'nestecho:metadata:file_path';
 
 export const defaultOptions = {
     appEntry: 'src/main.ts',
@@ -14,7 +15,7 @@ export const defaultOptions = {
         excludeExtraneousValues: true,
         enableImplicitConversion: true,
     },
-    cleanupDirs: ['dist'],
+    cleanups: [],
     controllerPatterns: [
         '**/*.controller.ts',
     ],
