@@ -1,5 +1,7 @@
 export * from './app-module-options.interface';
 export * from './class-type.interface';
+export * from './controller-list-item.interface';
+export * from './controller-template-descriptor.interface';
 export * from './custom-deserializer-factory.interface';
 export * from './deep-partial.interface';
 export * from './dto-import-matcher.interface';
