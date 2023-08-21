@@ -2,6 +2,7 @@ import { ClassTransformOptions } from 'class-transformer';
 import { AppModuleOptions } from './app-module-options.interface';
 import { DTOImportMatcher } from './dto-import-matcher.interface';
 import { EnsureImportOptions } from './ensure-import.interface';
+import { TemplateConfig } from './template-config.interface';
 
 export interface Options {
     apiBaseURL: string;
@@ -13,8 +14,10 @@ export interface Options {
     controllerPatterns?: string[];
     dtoImportMatcher?: DTOImportMatcher;
     outputDir?: string;
-    responseHandlers?: EnsureImportOptions[];
-    sdkOptionsInterfaceDescriptor?: Required<Omit<EnsureImportOptions, 'addImport' | 'sourceMatcher'> & { sourceMatcher: string }>;
+    responseHandlerDescriptors?: EnsureImportOptions[];
+    sdkClassName?: string;
+    sdkOptionsInterfaceDescriptor?: Required<Omit<EnsureImportOptions, 'addImport'>>;
+    templateConfig?: TemplateConfig;
     templateDir?: string;
     version?: string;
     versioning?: boolean;

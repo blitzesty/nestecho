@@ -1,9 +1,10 @@
 import loader from './loader';
 
-export * from './decorators';
-export * from './interfaces';
 export * from './codegen';
-export * from './utils';
 export * from './constants';
+export * from './decorators';
+export * from './define-config';
+export * from './interfaces';
+export * from './utils';
 
 export default loader;
