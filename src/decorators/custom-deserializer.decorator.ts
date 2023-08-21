@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { CUSTOM_DESERIALIZER } from '../constants';
-import { CustomDeserializerFactory } from '../interfaces/custom-deserializer-factory.interface';
+import { CustomDeserializerFactory } from '../interfaces';
 
 export function CustomDeserializer(factory: CustomDeserializerFactory) {
     return function (target: any, key: any, descriptor: PropertyDescriptor) {

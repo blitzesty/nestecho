@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-invalid-this */
 import { defaultOptions } from '../constants';
 import * as _ from 'lodash';
-import { Options } from '../interfaces/common.interface';
+import { Options } from '../interfaces';
 import * as path from 'path';
 import {
     AstUtil,
@@ -35,9 +35,10 @@ export default function(source) {
                 'appModule',
             ],
         ),
-    } as Required<Pick<Options, 'controllerPatterns' | 'workDir' | 'appEntry' | 'appModule'>>;
+    } as Required<Pick<Options, 'controllerPatterns' | 'appEntry' | 'appModule'>>;
     const requestAbsolutePath = this.resourcePath;
-    const requestRelativePath = path.relative(options.workDir, requestAbsolutePath);
+    const workDir = process.cwd();
+    const requestRelativePath = path.relative(workDir, requestAbsolutePath);
     const matchUtil = new MatchUtil();
 
     try {
@@ -46,8 +47,8 @@ export default function(source) {
                 let appModuleImportCode: string;
                 const appModuleRelativePath = './' + path
                     .relative(
-                        path.dirname(path.resolve(options.workDir, options.appEntry)),
-                        path.resolve(options.workDir, options.appModule.entry),
+                        path.dirname(path.resolve(workDir, options.appEntry)),
+                        path.resolve(workDir, options.appModule.entry),
                     )
                     .replace(/\.[^/.]+$/, '');
 

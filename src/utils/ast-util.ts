@@ -7,7 +7,7 @@ import {
 import {
     EnsureImportOptions,
     ImportItem,
-} from '../interfaces/common.interface';
+} from '../interfaces';
 import traverse from '@babel/traverse';
 import template from '@babel/template';
 import { ParseResult } from '@babel/parser';

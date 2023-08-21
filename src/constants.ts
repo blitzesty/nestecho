@@ -1,4 +1,4 @@
-import { Options } from './interfaces/common.interface';
+import { Options } from './interfaces/options.interface';
 
 export const CUSTOM_DESERIALIZER = 'nestecho:metadata:custom_deserializer';
 export const FILE_PATH = 'nestecho:metadata:file_path';
