@@ -3,6 +3,7 @@ import { AppModuleOptions } from './app-module-options.interface';
 import { DTOImportMatcher } from './dto-import-matcher.interface';
 import { EnsureImportOptions } from './ensure-import.interface';
 import { TemplateConfig } from './template-config.interface';
+import { InterfaceDescriptor } from './interface-descriptor.interface';
 
 export interface Options {
     apiBaseURL: string;
@@ -16,7 +17,7 @@ export interface Options {
     outputDir?: string;
     responseHandlerDescriptors?: EnsureImportOptions[];
     sdkClassName?: string;
-    sdkOptionsInterfaceDescriptor?: Required<Omit<EnsureImportOptions, 'addImport'>>;
+    sdkOptionsInterfaceDescriptor?: InterfaceDescriptor;
     templateConfig?: TemplateConfig;
     templateDir?: string;
     version?: string;
