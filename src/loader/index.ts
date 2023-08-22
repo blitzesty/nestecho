@@ -81,7 +81,7 @@ export default function(source) {
             } else if (matchUtil.match(options.controllerPatterns, requestRelativePath)) {
                 const ast = parseAst(source);
                 const astUtil = new AstUtil(ast);
-                const filePathDecoratorSource = '@blitzesty/nestecho/dist/decorators/filepath.decorator';
+                const filePathDecoratorSource = '@blitzesty/nestecho/dist/decorators/file-path.decorator';
                 const [filePathIdentifier] = astUtil.ensureImport({
                     addImport: true,
                     source: filePathDecoratorSource,
@@ -110,7 +110,7 @@ export default function(source) {
                 return callback(null, astUtil.getCode());
             }
 
-            callback(null, source);
+            return callback(null, source);
         })();
     } catch (e) {
         callback(e, source);

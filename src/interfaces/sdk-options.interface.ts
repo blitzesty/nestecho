@@ -1,4 +1,4 @@
-import { RequestOptions } from './common.interface';
+import { RequestOptions } from './request-options.interface';
 
 export interface SDKOptions {
     key?: string;

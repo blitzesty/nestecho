@@ -139,7 +139,7 @@ export class AstUtil {
 
                 this.ast.program.body.unshift(importDeclaration);
 
-                return newIdentifier;
+                return [newIdentifier, inputActualSource];
             } else {
                 return null;
             }
