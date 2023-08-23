@@ -71,10 +71,10 @@ export default function(source) {
 
                 const code = [
                     'import \'reflect-metadata\';',
-                    'import { Codegen } from \'@blitzesty/nestecho/dist/codegen\';',
+                    'import { Generator } from \'@blitzesty/nestecho/dist/generator\';',
                     appModuleImportCode,
                     '',
-                    `console.log('LENCONDA:', Reflect.getMetadataKeys(${options.appModule.identifier}))`,
+                    `console.log('LENCONDA:', new Generator(${options.appModule.identifier}).generate())`,
                 ].join('\n');
 
                 return callback(null, code);

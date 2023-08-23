@@ -7,6 +7,7 @@ export const FILE_PATH = 'nestecho:metadata:file_path';
 export const INNER_TEMPLATE_DIR = path.resolve(__dirname, '../templates');
 
 export const defaultOptions = {
+    apiBaseURL: '/',
     appEntry: 'src/main.ts',
     appModule: {
         entry: 'src/app.module.ts',
@@ -43,4 +44,4 @@ export const defaultOptions = {
         request: 'request.ts',
     },
     versioning: false,
-} as Required<Omit<Options, 'apiBaseURL' | 'packageName'>>;
+} as Required<Omit<Options, 'packageName'>>;
