@@ -6,6 +6,7 @@ export * from './custom-deserializer-factory.interface';
 export * from './deep-partial.interface';
 export * from './dto-import-matcher.interface';
 export * from './ensure-import.interface';
+export * from './generator-options.interface';
 export * from './import-item.interface';
 export * from './import-type.interface';
 export * from './interface-descriptor.interface';
