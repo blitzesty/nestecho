@@ -4,8 +4,8 @@ import * as _ from 'lodash';
 import { Options } from '../interfaces';
 import * as path from 'path';
 import {
-    AstUtil,
-    MatchUtil,
+    ensureImport,
+    matchOnce,
     parseAst,
 } from '../utils';
 import { FilePath } from '../decorators';
@@ -16,6 +16,7 @@ import {
     identifier,
     stringLiteral,
 } from '@babel/types';
+import generate from '@babel/generator';
 
 export default function(source) {
     const callback = this.async();
@@ -39,7 +40,6 @@ export default function(source) {
     const requestAbsolutePath = this.resourcePath;
     const workDir = process.cwd();
     const requestRelativePath = path.relative(workDir, requestAbsolutePath);
-    const matchUtil = new MatchUtil();
 
     try {
         (async function() {
@@ -78,11 +78,11 @@ export default function(source) {
                 ].join('\n');
 
                 return callback(null, code);
-            } else if (matchUtil.match(options.controllerPatterns, requestRelativePath)) {
+            } else if (matchOnce(options.controllerPatterns, requestRelativePath)) {
                 const ast = parseAst(source);
-                const astUtil = new AstUtil(ast);
                 const filePathDecoratorSource = '@blitzesty/nestecho/dist/decorators/file-path.decorator';
-                const [filePathIdentifier] = astUtil.ensureImport({
+                const [filePathIdentifier] = ensureImport({
+                    ast,
                     addImport: true,
                     source: filePathDecoratorSource,
                     sourceMatcher: /^\@blitzesty\/nestecho/g,
@@ -107,7 +107,7 @@ export default function(source) {
                     },
                 });
 
-                return callback(null, astUtil.getCode());
+                return callback(null, generate(ast)?.code);
             }
 
             return callback(null, source);
