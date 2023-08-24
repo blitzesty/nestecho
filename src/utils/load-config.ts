@@ -8,6 +8,7 @@ import * as requireFromString from 'require-from-string';
 export function loadConfig(filePath: string) {
     const result: Options = {
         packageName: fs.readJsonSync(path.resolve(path.dirname(filePath), 'package.json'))?.name + '-sdk',
+        ...defaultOptions,
         ...(
             !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()
                 ? defaultOptions

@@ -3,16 +3,25 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { GeneratorOptions } from './interfaces/generator-options.interface';
 import {
-    ControllerListItem,
+    ControllerPath,
+    DescribeDecoratorOptions,
+    ImportType,
     Options,
 } from './interfaces';
-import { loadConfig } from './utils';
+import {
+    loadConfig,
+    parseAst,
+} from './utils';
 import {
     DynamicModule,
     ForwardReference,
     Type,
 } from '@nestjs/common';
-import { FILE_PATH } from './constants';
+import {
+    FILE_PATH,
+    NESTECHO_DESCRIPTION,
+} from './constants';
+import traverse from '@babel/traverse';
 
 export class Generator {
     protected workDir: string;
@@ -44,7 +53,106 @@ export class Generator {
     }
 
     public generate() {
-        let result: ControllerListItem[] = [];
+        // const resultObject: ControllerMap = {};
+        const result: ControllerPath[] = [];
+        const allControllers = this.findAllControllers(this.appModule);
+
+        for (const controller of allControllers) {
+            const absoluteFilePath = Reflect.getMetadata(FILE_PATH, controller);
+            let pathname: string;
+
+            if (!absoluteFilePath || typeof absoluteFilePath !== 'string') {
+                continue;
+            }
+
+            try {
+                pathname = this.projectConfig.controllerScheme({
+                    filePath: absoluteFilePath,
+                    name: controller.name,
+                    workDir: this.workDir,
+                });
+            } catch (e) {
+                continue;
+            }
+
+            if (!pathname || typeof pathname !== 'string') {
+                continue;
+            }
+
+            let importType: ImportType;
+            let exportName: string;
+            const ast = parseAst(fs.readFileSync(absoluteFilePath).toString());
+            const description: DescribeDecoratorOptions = Reflect.getMetadata(NESTECHO_DESCRIPTION, controller) ?? {};
+
+            traverse(ast, {
+                Identifier(nodePath) {
+                    if (nodePath.node.name !== controller.name) {
+                        return;
+                    }
+
+                    if (
+                        nodePath?.parentPath?.node?.type === 'ClassDeclaration' &&
+                        nodePath?.parentPath?.parentPath?.node?.type === 'ExportNamedDeclaration'
+                    ) {
+                        importType = 'ImportSpecifier';
+                        exportName = controller.name;
+                        nodePath.stop();
+                        return;
+                    }
+
+                    if (
+                        nodePath?.parentPath?.node?.type === 'ExportSpecifier' &&
+                        nodePath?.parentPath?.node?.exported?.type === 'Identifier'
+                    ) {
+                        importType = 'ImportSpecifier';
+                        exportName = nodePath?.parentPath?.node?.exported?.name;
+                        nodePath.stop();
+                        return;
+                    }
+
+                    if (nodePath?.parentPath?.node?.type === 'ExportDefaultDeclaration') {
+                        importType = 'ImportDefaultSpecifier';
+                        exportName = nodePath?.node?.name;
+                        nodePath.stop();
+                        return;
+                    }
+
+                    if (
+                        nodePath?.parentPath?.node?.type === 'ClassDeclaration' &&
+                        nodePath?.parentPath?.parentPath?.node?.type === 'ExportDefaultDeclaration'
+                    ) {
+                        importType = 'ImportDefaultSpecifier';
+                        exportName = nodePath?.node?.name;
+                        nodePath.stop();
+                        return;
+                    }
+                },
+            });
+
+            if ((!importType && !description.importType) || (!exportName && !description.exportName)) {
+                continue;
+            }
+
+            const controllerItem = this.findControllerListPath(
+                pathname.split('.').slice(0, -1).join('.'),
+                result,
+            );
+
+            if (!controllerItem) {
+                continue;
+            }
+
+            controllerItem.children.push({
+                path: pathname.split('.').pop(),
+                children: [],
+                controllerDescriptor: {
+                    exportName: description.exportName || exportName,
+                    filePath: absoluteFilePath,
+                    importType: description.importType || importType,
+                    name: controller.name,
+                },
+            });
+        }
 
         return result;
     }
@@ -96,5 +204,32 @@ export class Generator {
                 return this.findWorkDir(parentPath);
             }
         }
+    }
+
+    private findControllerListPath(pathname: string, controllerList: ControllerPath[]) {
+        if (!pathname || !controllerList || !Array.isArray(controllerList)) {
+            return null;
+        }
+
+        const pathnameSegments = pathname.split('.');
+        let currentList = controllerList;
+        let result: ControllerPath;
+
+        while (pathnameSegments.length > 0) {
+            const currentPathnameSegment = pathnameSegments.shift();
+            result = currentList.find((listItem) => listItem.path === currentPathnameSegment);
+
+            if (!result) {
+                result = {
+                    path: currentPathnameSegment,
+                    children: [],
+                };
+                currentList.push(result);
+            }
+
+            currentList = result.children;
+        }
+
+        return result;
     }
 }

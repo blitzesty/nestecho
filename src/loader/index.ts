@@ -74,7 +74,7 @@ export default function(source) {
                     'import { Generator } from \'@blitzesty/nestecho/dist/generator\';',
                     appModuleImportCode,
                     '',
-                    `console.log('LENCONDA:', new Generator(${options.appModule.identifier}).generate())`,
+                    `console.log('LENCONDA:', JSON.stringify(new Generator(${options.appModule.identifier}).generate()))`,
                 ].join('\n');
 
                 return callback(null, code);
@@ -100,7 +100,7 @@ export default function(source) {
                             callExpression(
                                 identifier(filePathIdentifier),
                                 [
-                                    stringLiteral(filePathDecoratorSource),
+                                    stringLiteral(requestAbsolutePath),
                                 ],
                             ),
                         ));

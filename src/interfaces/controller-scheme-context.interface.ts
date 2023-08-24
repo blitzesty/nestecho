@@ -1,5 +1,5 @@
 export interface ControllerSchemeContext {
-    fileRelativePath: string;
+    filePath: string;
     name: string;
     workDir: string;
 }
