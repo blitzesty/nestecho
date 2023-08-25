@@ -22,6 +22,7 @@ export const defaultOptions = {
         enableImplicitConversion: true,
     },
     cleanups: [],
+    controllersOutputDir: './controllers',
     controllerPatterns: [
         '**/*.controller.ts',
     ],
@@ -51,6 +52,7 @@ export const defaultOptions = {
         sourceMatcher: /\.dto$/g,
     },
     outputDir: './sdk',
+    outputCodeDir: './src',
     responseHandlerDescriptors: [],
     sdkClassName: 'Client',
     sdkOptionsInterfaceDescriptor: {
@@ -59,9 +61,9 @@ export const defaultOptions = {
         sourceMatcher: /^\@blitzesty\/nestecho\/*/g,
         source: '@blitzesty/nestecho/dist/sdk-options.interface',
     },
-    templateConfig: {
-        index: 'index.ts',
-        request: 'request.ts',
-    },
+    sourceCodeDir: './src',
+    templateDir: path.resolve(__dirname, '../templates'),
+    templateReplacements: {},
+    version: '0.0.0',
     versioning: false,
 } as Required<Omit<Options, 'packageName'>>;

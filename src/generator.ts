@@ -1,14 +1,17 @@
 import 'reflect-metadata';
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import { GeneratorOptions } from './interfaces/generator-options.interface';
 import {
     ControllerPath,
+    ControllerTemplateDescriptor,
     DescribeDecoratorOptions,
+    GeneratorOptions,
     ImportType,
     Options,
+    TemplateContext,
 } from './interfaces';
 import {
+    ensureImport,
     loadConfig,
     parseAst,
 } from './utils';
@@ -22,10 +25,42 @@ import {
     NESTECHO_DESCRIPTION,
 } from './constants';
 import traverse from '@babel/traverse';
+import * as Handlebars from 'handlebars';
+import generate from '@babel/generator';
+import { globSync } from 'glob';
+import { ParseResult } from '@babel/parser';
+import { File } from '@babel/types';
+
+interface CustomFileProcessorContext {
+    entryAst: ParseResult<File>;
+    entryControllerPaths: ControllerPath[];
+    rawContent: string;
+    templateContext: TemplateContext;
+}
 
 export class Generator {
-    protected workDir: string;
+    protected outputAbsolutePath: string;
     protected projectConfig: Options;
+    protected result: Record<string, string> = {};
+    protected workDir: string;
+    protected customFileProcessors: Record<string, (context: CustomFileProcessorContext) => string> = {
+        '{{outputCodeFolder}}/index.ts': ({
+            entryAst,
+            templateContext,
+            rawContent,
+        }) => {
+            const contentTemplate = Handlebars.compile(rawContent);
+            return [
+                generate(entryAst).code,
+                contentTemplate(templateContext),
+            ].join('\n');
+        },
+    };
+    protected readonly internalTemplateAbsolutePath = path.resolve(__dirname, '../templates');
+
+    private controllerDescriptors: ControllerTemplateDescriptor[] = [];
+    private entryAst: ParseResult<File>;
+    private entryControllerPaths: ControllerPath[] = [];
 
     public constructor(
         protected readonly appModule: Type,
@@ -50,24 +85,39 @@ export class Generator {
         }
 
         this.projectConfig = loadConfig(this.options.configFilePath);
+        this.outputAbsolutePath = path.resolve(this.workDir, this.projectConfig.outputDir);
     }
 
     public generate() {
-        // const resultObject: ControllerMap = {};
-        const result: ControllerPath[] = [];
+        this.generateControllers();
+
+        let fileTemplatePaths = globSync(this.internalTemplateAbsolutePath + '/**/*.hbs')
+            .map((fileTemplatePath) => path.relative(this.internalTemplateAbsolutePath, fileTemplatePath))
+            .map((fileTemplateRelativePath) => fileTemplateRelativePath.replace(/\.hbs$/g, ''));
+
+        for (const fileTemplatePath of fileTemplatePaths) {
+            this.generateFileFromTemplate(fileTemplatePath);
+        }
+
+        return this.result;
+    }
+
+    protected generateControllers() {
+        this.entryAst = parseAst('');
+
         const allControllers = this.findAllControllers(this.appModule);
 
         for (const controller of allControllers) {
-            const absoluteFilePath = Reflect.getMetadata(FILE_PATH, controller);
+            const fileAbsolutePath = Reflect.getMetadata(FILE_PATH, controller);
             let pathname: string;
 
-            if (!absoluteFilePath || typeof absoluteFilePath !== 'string') {
+            if (!fileAbsolutePath || typeof fileAbsolutePath !== 'string') {
                 continue;
             }
 
             try {
                 pathname = this.projectConfig.controllerScheme({
-                    filePath: absoluteFilePath,
+                    filePath: fileAbsolutePath,
                     name: controller.name,
                     workDir: this.workDir,
                 });
@@ -81,7 +131,7 @@ export class Generator {
 
             let importType: ImportType;
             let exportName: string;
-            const ast = parseAst(fs.readFileSync(absoluteFilePath).toString());
+            const ast = parseAst(fs.readFileSync(fileAbsolutePath).toString());
             const description: DescribeDecoratorOptions = Reflect.getMetadata(NESTECHO_DESCRIPTION, controller) ?? {};
 
             traverse(ast, {
@@ -135,26 +185,56 @@ export class Generator {
 
             const controllerItem = this.findControllerListPath(
                 pathname.split('.').slice(0, -1).join('.'),
-                result,
+                this.entryControllerPaths,
             );
 
             if (!controllerItem) {
                 continue;
             }
 
+            const controllerDescriptorWithoutImportName: Omit<ControllerTemplateDescriptor, 'importName'> = {
+                exportName: description.exportName || exportName,
+                filePath: fileAbsolutePath,
+                importType: description.importType || importType,
+                name: controller.name,
+            };
+            const [importName] = ensureImport({
+                ast: this.entryAst,
+                type: controllerDescriptorWithoutImportName.importType,
+                identifier: controllerDescriptorWithoutImportName.exportName,
+                sourceMatcher: new RegExp(path.basename(fileAbsolutePath.split('.').slice(0, -1).join('.')), 'g'),
+                source: '.' + path.sep + path.relative(
+                    path.resolve(
+                        this.outputAbsolutePath,
+                        this.projectConfig.outputCodeDir,
+                    ),
+                    path.resolve(
+                        this.outputAbsolutePath,
+                        this.projectConfig.outputCodeDir,
+                        this.projectConfig.controllersOutputDir,
+                        path.relative(
+                            path.resolve(
+                                this.workDir,
+                                this.projectConfig.sourceCodeDir,
+                            ),
+                            fileAbsolutePath,
+                        ),
+                    ),
+                ),
+                addImport: true,
+            });
+            const controllerDescriptor: ControllerTemplateDescriptor = {
+                ...controllerDescriptorWithoutImportName,
+                importName,
+            };
+
             controllerItem.children.push({
                 path: pathname.split('.').pop(),
                 children: [],
-                controllerDescriptor: {
-                    exportName: description.exportName || exportName,
-                    filePath: absoluteFilePath,
-                    importType: description.importType || importType,
-                    name: controller.name,
-                },
+                controllerDescriptor,
             });
+            this.controllerDescriptors.push(controllerDescriptor);
         }
-
-        return result;
     }
 
     protected findAllControllers(module: Type<any> | DynamicModule | Promise<DynamicModule> | ForwardReference<any> = this.appModule) {
@@ -231,5 +311,65 @@ export class Generator {
         }
 
         return result;
+    }
+
+    private generateFileFromTemplate(filePath: string) {
+        const customTemplateFileRelativePath = this.projectConfig.templateReplacements[filePath];
+        let templateFileAbsolutePath: string;
+        let fileRawContent: string;
+        const outputCodeFolder = path.relative(this.workDir, path.resolve(this.workDir, this.projectConfig.outputCodeDir));
+
+        if (customTemplateFileRelativePath && typeof customTemplateFileRelativePath === 'string') {
+            templateFileAbsolutePath = path.resolve(
+                this.workDir,
+                this.projectConfig.templateDir,
+                customTemplateFileRelativePath,
+            );
+        } else if (customTemplateFileRelativePath === true || typeof customTemplateFileRelativePath === 'undefined') {
+            templateFileAbsolutePath = path.resolve(this.internalTemplateAbsolutePath, filePath);
+        } else if (customTemplateFileRelativePath === false) {
+            return false;
+        }
+
+        try {
+            fileRawContent = fs.readFileSync(templateFileAbsolutePath + '.hbs').toString();
+        } catch (e) {}
+
+        if (!fileRawContent) {
+            return false;
+        }
+
+        const fileTemplate = Handlebars.compile(fileRawContent);
+        const pathTemplate = Handlebars.compile(filePath);
+        const pathname = pathTemplate({
+            outputCodeFolder,
+        });
+        let fileContent: string;
+        const customProcessor = this.customFileProcessors[filePath];
+        const templateContext = this.getTemplateContext();
+
+        if (typeof customProcessor === 'function') {
+            fileContent = customProcessor({
+                entryAst: this.entryAst,
+                entryControllerPaths: this.entryControllerPaths,
+                rawContent: fileRawContent,
+                templateContext,
+            });
+        } else {
+            fileContent = fileTemplate(templateContext);
+        }
+
+        this.result[path.resolve(this.outputAbsolutePath, pathname)] = fileContent;
+
+        return true;
+    }
+
+    private getTemplateContext(): TemplateContext {
+        return {
+            projectConfig: this.projectConfig,
+            workDir: this.workDir,
+            outputAbsolutePath: this.outputAbsolutePath,
+            paths: this.entryControllerPaths,
+        };
     }
 }

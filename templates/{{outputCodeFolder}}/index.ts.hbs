@@ -1,0 +1,23 @@
+{{#*inline "content"}}
+{
+    {{#each children}}
+    {{#if this.controllerDescriptor}}
+        {{this.path}}: new {{this.controllerDescriptor.importName}}(),
+    {{else}}
+        {{this.path}}: {{> content path=this}}
+    {{/if}}
+    {{/each}}
+    },
+{{/inline}}
+
+export class {{projectConfig.sdkClassName}} {
+    {{#each paths}}
+    {{#if this.controllerDescriptor}}
+    public {{this.path}} = new {{this.controllerDescriptor.importName}}();
+    {{else}}
+    {{#if this.children.length}}
+    public {{this.path}} = {{> content path=this}}
+    {{/if}}
+    {{/if}}
+    {{/each}}
+}
