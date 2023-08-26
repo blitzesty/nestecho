@@ -5,6 +5,7 @@ import * as _ from 'lodash';
 export const CUSTOM_DESERIALIZER = 'nestecho:metadata:custom_deserializer';
 export const FILE_PATH = 'nestecho:metadata:file_path';
 export const NESTECHO_DESCRIPTION = 'nestecho:metadata:description';
+export const NESTECHO_EXCLUDE = 'nestecho:metadata:exclude';
 
 export const INNER_TEMPLATE_DIR = path.resolve(__dirname, '../templates');
 

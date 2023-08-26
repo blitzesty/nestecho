@@ -18,11 +18,13 @@ import {
 import {
     DynamicModule,
     ForwardReference,
+    RequestMethod,
     Type,
 } from '@nestjs/common';
 import {
     FILE_PATH,
     NESTECHO_DESCRIPTION,
+    NESTECHO_EXCLUDE,
 } from './constants';
 import traverse from '@babel/traverse';
 import * as Handlebars from 'handlebars';
@@ -111,7 +113,11 @@ export class Generator {
             const fileAbsolutePath = Reflect.getMetadata(FILE_PATH, controller);
             let pathname: string;
 
-            if (!fileAbsolutePath || typeof fileAbsolutePath !== 'string') {
+            if (
+                !fileAbsolutePath ||
+                typeof fileAbsolutePath !== 'string' ||
+                Reflect.getMetadata(NESTECHO_EXCLUDE, controller)
+            ) {
                 continue;
             }
 
@@ -163,6 +169,11 @@ export class Generator {
                     if (nodePath?.parentPath?.node?.type === 'ExportDefaultDeclaration') {
                         importType = 'ImportDefaultSpecifier';
                         exportName = nodePath?.node?.name;
+
+                        if (!exportName) {
+                            exportName = path.basename(fileAbsolutePath).split('.').slice(0, -1).join('.');
+                        }
+
                         nodePath.stop();
                         return;
                     }
@@ -192,10 +203,35 @@ export class Generator {
                 continue;
             }
 
+            console.log('LENCONDA:3', Object.getOwnPropertyDescriptors(controller.prototype));
+
             const controllerDescriptorWithoutImportName: Omit<ControllerTemplateDescriptor, 'importName'> = {
                 exportName: description.exportName || exportName,
                 filePath: fileAbsolutePath,
                 importType: description.importType || importType,
+                methods: Object.keys(controller.prototype).reduce((result, methodName) => {
+                    const pathname = Reflect.getMetadata('path', controller.prototype?.[methodName]);
+                    const methodIndex = Reflect.getMetadata('method', controller.prototype?.[methodName]);
+
+                    console.log('LENCONDA:2', pathname, methodIndex);
+
+                    if (
+                        !pathname ||
+                        typeof methodIndex !== 'number' ||
+                        Reflect.getMetadata(NESTECHO_EXCLUDE, controller.prototype?.[methodName])
+                    ) {
+                        return result;
+                    }
+
+                    const method = Object.getOwnPropertyDescriptors(RequestMethod)?.[methodIndex]?.value;
+
+                    result[methodName] = {
+                        method,
+                        path: pathname,
+                    };
+
+                    return result;
+                }, {}),
                 name: controller.name,
             };
             const [importName] = ensureImport({
@@ -235,6 +271,8 @@ export class Generator {
             });
             this.controllerDescriptors.push(controllerDescriptor);
         }
+
+        console.log('LENCONDA:1', JSON.stringify(this.entryControllerPaths));
     }
 
     protected findAllControllers(module: Type<any> | DynamicModule | Promise<DynamicModule> | ForwardReference<any> = this.appModule) {
