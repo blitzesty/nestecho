@@ -108,6 +108,7 @@ export class Generator {
         this.entryAst = parseAst('');
 
         const allControllers = this.findAllControllers(this.appModule);
+        const paths: string[] = [];
 
         for (const controller of allControllers) {
             const fileAbsolutePath = Reflect.getMetadata(FILE_PATH, controller);
@@ -131,9 +132,11 @@ export class Generator {
                 continue;
             }
 
-            if (!pathname || typeof pathname !== 'string') {
+            if (!pathname || typeof pathname !== 'string' || paths.includes(pathname)) {
                 continue;
             }
+
+            paths.push(pathname);
 
             let importType: ImportType;
             let exportName: string;
@@ -203,8 +206,6 @@ export class Generator {
                 continue;
             }
 
-            console.log('LENCONDA:3', Object.getOwnPropertyDescriptors(controller.prototype));
-
             const controllerDescriptorWithoutImportName: Omit<ControllerTemplateDescriptor, 'importName'> = {
                 exportName: description.exportName || exportName,
                 filePath: fileAbsolutePath,
@@ -212,8 +213,6 @@ export class Generator {
                 methods: Object.entries(Object.getOwnPropertyDescriptors(controller.prototype)).reduce((result, [methodName, descriptor]) => {
                     const pathname = Reflect.getMetadata('path', descriptor?.value);
                     const methodIndex = Reflect.getMetadata('method', descriptor?.value);
-
-                    console.log('LENCONDA:2', pathname, methodIndex);
 
                     if (
                         !pathname ||
@@ -276,8 +275,6 @@ export class Generator {
             });
             this.controllerDescriptors.push(controllerDescriptor);
         }
-
-        console.log('LENCONDA:1', JSON.stringify(this.entryControllerPaths));
     }
 
     protected findAllControllers(module: Type<any> | DynamicModule | Promise<DynamicModule> | ForwardReference<any> = this.appModule) {
