@@ -209,9 +209,9 @@ export class Generator {
                 exportName: description.exportName || exportName,
                 filePath: fileAbsolutePath,
                 importType: description.importType || importType,
-                methods: Object.keys(controller.prototype).reduce((result, methodName) => {
-                    const pathname = Reflect.getMetadata('path', controller.prototype?.[methodName]);
-                    const methodIndex = Reflect.getMetadata('method', controller.prototype?.[methodName]);
+                methods: Object.entries(Object.getOwnPropertyDescriptors(controller.prototype)).reduce((result, [methodName, descriptor]) => {
+                    const pathname = Reflect.getMetadata('path', descriptor?.value);
+                    const methodIndex = Reflect.getMetadata('method', descriptor?.value);
 
                     console.log('LENCONDA:2', pathname, methodIndex);
 
