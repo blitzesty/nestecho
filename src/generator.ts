@@ -234,6 +234,11 @@ export class Generator {
                 }, {}),
                 name: controller.name,
             };
+
+            if (!Object.keys(controllerDescriptorWithoutImportName.methods).length) {
+                continue;
+            }
+
             const [importName] = ensureImport({
                 ast: this.entryAst,
                 type: controllerDescriptorWithoutImportName.importType,
