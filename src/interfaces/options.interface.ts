@@ -25,5 +25,4 @@ export interface Options {
     templateDir?: string;
     templateReplacements?: TemplateReplacements;
     version?: string;
-    versioning?: boolean;
 }

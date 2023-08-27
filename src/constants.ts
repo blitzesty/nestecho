@@ -67,4 +67,4 @@ export const defaultOptions = {
     templateReplacements: {},
     version: '0.0.0',
     versioning: false,
-} as Required<Omit<Options, 'packageName'>>;
+} as Required<Omit<Options, 'packageName' | 'version'>>;
