@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { Options } from './interfaces/options.interface';
 import * as _ from 'lodash';
+import { RouteParamType } from './interfaces/route-param-type.interface';
 
 export const CUSTOM_DESERIALIZER = 'nestecho:metadata:custom_deserializer';
 export const FILE_PATH = 'nestecho:metadata:file_path';
@@ -68,3 +69,9 @@ export const defaultOptions = {
     version: '0.0.0',
     versioning: false,
 } as Required<Omit<Options, 'packageName' | 'version'>>;
+
+export const ROUTE_PARAM_TYPES: Record<string, RouteParamType> = {
+    '3': 'body',
+    '4': 'query',
+    '5': 'param',
+};

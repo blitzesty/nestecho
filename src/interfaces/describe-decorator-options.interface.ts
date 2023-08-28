@@ -1,3 +1,3 @@
-import { ControllerTemplateDescriptor } from './controller-template-descriptor.interface';
+import { ControllerDescriptor } from './controller-descriptor.interface';
 
-export type DescribeDecoratorOptions = Partial<Pick<ControllerTemplateDescriptor, 'exportName' | 'importType'>>;
+export type DescribeDecoratorOptions = Partial<Pick<ControllerDescriptor, 'exportName' | 'importType'>>;

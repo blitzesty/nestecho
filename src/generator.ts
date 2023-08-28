@@ -3,12 +3,14 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import {
     ControllerPath,
-    ControllerTemplateDescriptor,
+    ControllerDescriptor,
     DescribeDecoratorOptions,
     GeneratorOptions,
     ImportType,
     Options,
     TemplateContext,
+    ControllerMethodDescriptor,
+    RouteParamType,
 } from './interfaces';
 import {
     ensureImport,
@@ -25,13 +27,30 @@ import {
     FILE_PATH,
     NESTECHO_DESCRIPTION,
     NESTECHO_EXCLUDE,
+    ROUTE_PARAM_TYPES,
 } from './constants';
 import traverse from '@babel/traverse';
 import * as Handlebars from 'handlebars';
 import generate from '@babel/generator';
 import { globSync } from 'glob';
 import { ParseResult } from '@babel/parser';
-import { File } from '@babel/types';
+import {
+    File,
+    Identifier,
+    ImportDeclaration,
+    ImportDefaultSpecifier,
+    ImportSpecifier,
+    Statement,
+    TSTypeAnnotation,
+    blockStatement,
+    identifier,
+    tsPropertySignature,
+    tsTypeAnnotation,
+    tsTypeLiteral,
+} from '@babel/types';
+import * as _ from 'lodash';
+import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
+import template from '@babel/template';
 
 interface CustomFileProcessorContext {
     entryAst: ParseResult<File>;
@@ -60,7 +79,7 @@ export class Generator {
     };
     protected readonly internalTemplateAbsolutePath = path.resolve(__dirname, '../templates');
 
-    private controllerDescriptors: ControllerTemplateDescriptor[] = [];
+    private controllerDescriptors: ControllerDescriptor[] = [];
     private entryAst: ParseResult<File>;
     private entryControllerPaths: ControllerPath[] = [];
 
@@ -140,6 +159,7 @@ export class Generator {
 
             let importType: ImportType;
             let exportName: string;
+            let noExplicitName = false;
             const ast = parseAst(fs.readFileSync(fileAbsolutePath).toString());
             const description: DescribeDecoratorOptions = Reflect.getMetadata(NESTECHO_DESCRIPTION, controller) ?? {};
 
@@ -175,6 +195,7 @@ export class Generator {
 
                         if (!exportName) {
                             exportName = path.basename(fileAbsolutePath).split('.').slice(0, -1).join('.');
+                            noExplicitName = true;
                         }
 
                         nodePath.stop();
@@ -206,7 +227,7 @@ export class Generator {
                 continue;
             }
 
-            const controllerDescriptorWithoutImportName: Omit<ControllerTemplateDescriptor, 'importName'> = {
+            const controllerDescriptorWithoutImportName: Omit<ControllerDescriptor, 'importName'> = {
                 exportName: description.exportName || exportName,
                 filePath: fileAbsolutePath,
                 importType: description.importType || importType,
@@ -223,15 +244,46 @@ export class Generator {
                     }
 
                     const method = Object.getOwnPropertyDescriptors(RequestMethod)?.[methodIndex]?.value;
+                    const routeArgsMetadata: Record<string, {
+                        index: number;
+                        data: object | string | number | undefined;
+                        pipes: any[];
+                    }> = Reflect.getMetadata(ROUTE_ARGS_METADATA, controller, methodName) ?? {};
 
                     result[methodName] = {
                         method,
                         path: pathname,
+                        routeParams: Object
+                            .entries(routeArgsMetadata)
+                            .map(([key, metadata]) => {
+                                const [routeParamTypeIndex] = key.split(':');
+                                const routeParamType = ROUTE_PARAM_TYPES[routeParamTypeIndex];
+
+                                if (
+                                    !metadata ||
+                                    typeof metadata?.index !== 'number' ||
+                                    !routeParamType ||
+                                    typeof metadata?.data !== 'string' ||
+                                    typeof metadata?.data !== 'undefined' ||
+                                    (typeof metadata?.data === 'undefined' && routeParamType !== 'body')
+                                ) {
+                                    return null;
+                                }
+
+                                return {
+                                    index: metadata?.index,
+                                    mappedName: metadata?.data,
+                                    type: routeParamType,
+                                };
+                            })
+                            .filter((metadata) => !!metadata),
                     };
 
                     return result;
-                }, {}),
+                }, {} as Record<string, ControllerMethodDescriptor>),
                 name: controller.name,
+                noExplicitName,
+                path: Reflect.getMetadata('path', controller),
             };
 
             if (!Object.keys(controllerDescriptorWithoutImportName.methods).length) {
@@ -263,7 +315,7 @@ export class Generator {
                 ),
                 addImport: true,
             });
-            const controllerDescriptor: ControllerTemplateDescriptor = {
+            const controllerDescriptor: ControllerDescriptor = {
                 ...controllerDescriptorWithoutImportName,
                 importName,
             };
@@ -308,6 +360,198 @@ export class Generator {
         }
 
         return controllers;
+    }
+
+    protected transpileAndGenerateControllers() {
+        const controllerFilePaths = _.uniq(this.controllerDescriptors.map(({ filePath }) => filePath));
+
+        for (const controllerFilePath of controllerFilePaths) {
+            let content: string;
+            const controllerFileRelativePath = path.relative(
+                path.resolve(
+                    this.workDir,
+                    this.projectConfig.sourceCodeDir,
+                ),
+                controllerFilePath,
+            );
+
+            try {
+                content = fs.readFileSync(controllerFilePath).toString();
+            } catch (e) {
+                continue;
+            }
+
+            if (!content) {
+                continue;
+            }
+
+            const ast = parseAst(content);
+            const controllerDescriptors = this.controllerDescriptors.filter(({ filePath }) => filePath === controllerFilePath);
+            const ensuredImportMap = {
+                DeepPartial: ensureImport({
+                    ast,
+                    identifier: 'DeepPartial',
+                    addImport: true,
+                    type: 'ImportSpecifier',
+                    source: '@blitzesty/nestecho/dist/interfaces/deep-partial.interface',
+                    sourceMatcher: /\@blitzesty\/nestecho/g,
+                }),
+                CUSTOM_SERIALIZER: ensureImport({
+                    ast,
+                    identifier: 'CUSTOM_SERIALIZER',
+                    addImport: true,
+                    type: 'ImportSpecifier',
+                    source: '@blitzesty/nestecho/dist/constants',
+                    sourceMatcher: /\@blitzesty\/nestecho/g,
+                }),
+                request: ensureImport({
+                    ast,
+                    identifier: 'request',
+                    addImport: true,
+                    type: 'ImportSpecifier',
+                    source: path.relative(
+                        path.resolve(
+                            this.outputAbsolutePath,
+                            this.projectConfig.outputCodeDir,
+                            this.projectConfig.controllersOutputDir,
+                            controllerFileRelativePath,
+                        ),
+                        path.resolve(
+                            this.outputAbsolutePath,
+                            this.projectConfig.outputCodeDir,
+                            'request',
+                        ),
+                    ),
+                    sourceMatcher: /\@blitzesty\/nestecho/g,
+                }),
+            };
+            const importedDtoIdentifierNames = ast.program.body
+                .filter((declaration) => declaration?.type === 'ImportDeclaration')
+                .reduce((result: Array<ImportSpecifier | ImportDefaultSpecifier>, declaration: ImportDeclaration) => {
+                    return result.concat((declaration.specifiers || []).filter((specifier) => {
+                        const source = declaration.source.value;
+                        let matched = false;
+                        let matcher = this.projectConfig.dtoImportMatcher?.sourceMatcher;
+
+                        if (typeof matcher === 'string') {
+                            matched = matcher === source;
+                        } else if (_.isRegExp(matcher)) {
+                            matched = matcher.test(source);
+                        } else if (typeof matcher === 'function') {
+                            matched = matcher(source);
+                        }
+
+                        return (specifier.type === 'ImportSpecifier' || specifier.type === 'ImportDefaultSpecifier') && matched;
+                    }) as Array<ImportSpecifier | ImportDefaultSpecifier>);
+                }, [] as Array<ImportSpecifier | ImportDefaultSpecifier>)
+                .map((specifier) => specifier.local.name);
+
+            ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
+
+            traverse(ast, {
+                ClassDeclaration(nodePath1) {
+                    let controllerDescriptor: ControllerDescriptor;
+
+                    controllerDescriptor = controllerDescriptors.find(({
+                        noExplicitName,
+                        name,
+                    }) => {
+                        return (!noExplicitName && !nodePath1?.node?.id) || nodePath1?.node?.id?.name === name;
+                    });
+
+                    if (!controllerDescriptor) {
+                        return;
+                    }
+
+                    traverse(
+                        nodePath1?.node,
+                        {
+                            ClassMethod(nodePath2) {
+                                if (nodePath2?.node?.key?.type !== 'Identifier' || !controllerDescriptor.methods?.[nodePath2?.node?.key?.name]) {
+                                    nodePath2.remove();
+                                    return;
+                                }
+
+                                const {
+                                    method,
+                                    path: pathname,
+                                    routeParams = [],
+                                } = controllerDescriptor.methods[nodePath2?.node?.key?.name];
+                                const optionsIdentifier = identifier('options');
+                                const bodyOptions: Partial<Record<RouteParamType, Record<string, string | null>>> = {};
+                                const newBody = template.ast(
+                                    `
+                                        const currentMethodPath = '${controllerDescriptor.path}${pathname}';
+                                        const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, this.${(nodePath2?.node?.key as Identifier)?.name});
+                                        const optionsMap = ${JSON.stringify(bodyOptions)};
+
+                                        return await ${ensuredImportMap.request}({
+                                            method: '${method}',
+                                            url: currentMethodPath,
+                                            customSerializer,
+                                            optionsMap,
+                                            options,
+                                        });
+                                    `,
+                                );
+
+                                optionsIdentifier.optional = true;
+                                optionsIdentifier.typeAnnotation = tsTypeAnnotation(
+                                    tsTypeLiteral(
+                                        routeParams.map((routeParam) => {
+                                            const { index } = routeParam;
+                                            const param = nodePath2?.node?.params?.[index];
+
+                                            if (!param) {
+                                                return null;
+                                            }
+
+                                            let currentIdentifier: string;
+                                            let annotation: TSTypeAnnotation;
+                                            let required = true;
+
+                                            switch (param.type) {
+                                                case 'Identifier':
+                                                    currentIdentifier = param.name;
+                                                    if (param.typeAnnotation?.type === 'TSTypeAnnotation') {
+                                                        annotation = param.typeAnnotation;
+                                                    }
+                                                    break;
+                                                case 'AssignmentPattern':
+                                                    if (param.left.type === 'Identifier') {
+                                                        currentIdentifier = param.left.name;
+                                                        if (param?.left?.typeAnnotation?.type === 'TSTypeAnnotation') {
+                                                            annotation = param.left.typeAnnotation;
+                                                        }
+                                                        required = false;
+                                                    }
+                                                    break;
+                                                default:
+                                                    break;
+                                            }
+
+                                            if (!currentIdentifier || !annotation) {
+                                                return null;
+                                            }
+
+                                            const propertySignature = tsPropertySignature(identifier(currentIdentifier), annotation);
+
+                                            propertySignature.optional = !required;
+                                            // TODO: set bodyOptions
+
+                                            return propertySignature;
+                                        }),
+                                    ),
+                                );
+                                nodePath2.node.params = [optionsIdentifier];
+                                nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
+                            },
+                        },
+                        nodePath1.scope,
+                    );
+                },
+            });
+        }
     }
 
     private findWorkDir(startPath = process.cwd()) {
@@ -365,9 +609,9 @@ export class Generator {
                 this.projectConfig.templateDir,
                 customTemplateFileRelativePath,
             );
-        } else if (customTemplateFileRelativePath === true || typeof customTemplateFileRelativePath === 'undefined') {
+        } else if (typeof customTemplateFileRelativePath === 'undefined') {
             templateFileAbsolutePath = path.resolve(this.internalTemplateAbsolutePath, filePath);
-        } else if (customTemplateFileRelativePath === false) {
+        } else {
             return false;
         }
 
