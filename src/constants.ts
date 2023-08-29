@@ -2,6 +2,7 @@ import * as path from 'path';
 import { Options } from './interfaces/options.interface';
 import * as _ from 'lodash';
 import { RouteParamType } from './interfaces/route-param-type.interface';
+import { normalizeUrlPath } from './utils';
 
 export const CUSTOM_DESERIALIZER = 'nestecho:metadata:custom_deserializer';
 export const FILE_PATH = 'nestecho:metadata:file_path';
@@ -52,6 +53,43 @@ export const defaultOptions = {
             'ImportDefaultSpecifier',
         ],
         sourceMatcher: /\.dto$/g,
+    },
+    ensureImports: [
+        {
+            identifier: 'DeepPartial',
+            addImport: true,
+            type: 'ImportSpecifier',
+            source: '@blitzesty/nestecho/dist/interfaces/deep-partial.interface',
+            sourceMatcher: /\@blitzesty\/nestecho/g,
+        },
+        {
+            identifier: 'CUSTOM_SERIALIZER',
+            addImport: true,
+            type: 'ImportSpecifier',
+            source: '@blitzesty/nestecho/dist/constants',
+            sourceMatcher: /\@blitzesty\/nestecho/g,
+        },
+    ],
+    methodGenerator: ({
+        controllerDescriptor,
+        ensuredImportMap,
+        methodDescriptor,
+        methodName,
+        methodOptionsMap,
+    }) => {
+        return `
+            const currentMethodPath = '${normalizeUrlPath(controllerDescriptor.path + methodDescriptor.path)}';
+            const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, this.${methodName});
+            const optionsMap = ${JSON.stringify(methodOptionsMap)};
+
+            return await ${ensuredImportMap.request[0]}({
+                method: '${methodDescriptor.method}',
+                url: currentMethodPath,
+                customSerializer,
+                optionsMap,
+                options,
+            });
+        `;
     },
     outputDir: './sdk',
     outputCodeDir: './src',

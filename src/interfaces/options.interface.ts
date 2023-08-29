@@ -4,6 +4,8 @@ import { DTOImportMatcher } from './dto-import-matcher.interface';
 import { ControllerScheme } from './controller-scheme.interface';
 import { ImportDescriptor } from './import-descriptor.interface';
 import { TemplateReplacements } from './template-replacements.interface';
+import { MethodContext } from './method-context.interface';
+import { EnsureImportOptions } from './ensure-import-options.interface';
 
 export interface Options {
     packageName: string;
@@ -16,6 +18,8 @@ export interface Options {
     controllerPatterns?: string[];
     controllerScheme?: ControllerScheme;
     dtoImportMatcher?: DTOImportMatcher;
+    ensureImports?: EnsureImportOptions[];
+    methodGenerator?: (context: MethodContext) => string;
     outputDir?: string;
     outputCodeDir?: string;
     responseHandlerDescriptors?: ImportDescriptor[];

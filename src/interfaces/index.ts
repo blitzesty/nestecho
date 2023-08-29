@@ -14,6 +14,8 @@ export * from './generator-options.interface';
 export * from './import-descriptor.interface';
 export * from './import-item.interface';
 export * from './import-type.interface';
+export * from './method-context.interface';
+export * from './method-options-map.interface';
 export * from  './options.interface';
 export * from './request-options-context.interface';
 export * from './request-options.interface';

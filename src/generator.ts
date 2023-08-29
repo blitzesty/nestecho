@@ -10,10 +10,11 @@ import {
     Options,
     TemplateContext,
     ControllerMethodDescriptor,
-    RouteParamType,
+    MethodOptionsMap,
 } from './interfaces';
 import {
     ensureImport,
+    isInReturnTypeAnnotation,
     loadConfig,
     parseAst,
 } from './utils';
@@ -36,7 +37,6 @@ import { globSync } from 'glob';
 import { ParseResult } from '@babel/parser';
 import {
     File,
-    Identifier,
     ImportDeclaration,
     ImportDefaultSpecifier,
     ImportSpecifier,
@@ -47,6 +47,7 @@ import {
     tsPropertySignature,
     tsTypeAnnotation,
     tsTypeLiteral,
+    tsTypeParameterInstantiation,
 } from '@babel/types';
 import * as _ from 'lodash';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
@@ -387,23 +388,7 @@ export class Generator {
 
             const ast = parseAst(content);
             const controllerDescriptors = this.controllerDescriptors.filter(({ filePath }) => filePath === controllerFilePath);
-            const ensuredImportMap = {
-                DeepPartial: ensureImport({
-                    ast,
-                    identifier: 'DeepPartial',
-                    addImport: true,
-                    type: 'ImportSpecifier',
-                    source: '@blitzesty/nestecho/dist/interfaces/deep-partial.interface',
-                    sourceMatcher: /\@blitzesty\/nestecho/g,
-                }),
-                CUSTOM_SERIALIZER: ensureImport({
-                    ast,
-                    identifier: 'CUSTOM_SERIALIZER',
-                    addImport: true,
-                    type: 'ImportSpecifier',
-                    source: '@blitzesty/nestecho/dist/constants',
-                    sourceMatcher: /\@blitzesty\/nestecho/g,
-                }),
+            const ensuredImportMap: Record<string, [string, string]> = {
                 request: ensureImport({
                     ast,
                     identifier: 'request',
@@ -424,6 +409,13 @@ export class Generator {
                     ),
                     sourceMatcher: /\@blitzesty\/nestecho/g,
                 }),
+                ...(this.projectConfig.ensureImports.reduce((result, ensureImportOptions) => {
+                    result[ensureImportOptions.identifier] = ensureImport({
+                        ast,
+                        ...ensureImportOptions,
+                    });
+                    return result;
+                }, {})),
             };
             const importedDtoIdentifierNames = ast.program.body
                 .filter((declaration) => declaration?.type === 'ImportDeclaration')
@@ -445,6 +437,8 @@ export class Generator {
                     }) as Array<ImportSpecifier | ImportDefaultSpecifier>);
                 }, [] as Array<ImportSpecifier | ImportDefaultSpecifier>)
                 .map((specifier) => specifier.local.name);
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const generatorContext = this;
 
             ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
 
@@ -472,34 +466,24 @@ export class Generator {
                                     return;
                                 }
 
-                                const {
-                                    method,
-                                    path: pathname,
-                                    routeParams = [],
-                                } = controllerDescriptor.methods[nodePath2?.node?.key?.name];
+                                const methodDescriptor = controllerDescriptor.methods[nodePath2?.node?.key?.name];
                                 const optionsIdentifier = identifier('options');
-                                const bodyOptions: Partial<Record<RouteParamType, Record<string, string | null>>> = {};
-                                const newBody = template.ast(
-                                    `
-                                        const currentMethodPath = '${controllerDescriptor.path}${pathname}';
-                                        const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, this.${(nodePath2?.node?.key as Identifier)?.name});
-                                        const optionsMap = ${JSON.stringify(bodyOptions)};
+                                const methodOptionsMap: MethodOptionsMap = {};
 
-                                        return await ${ensuredImportMap.request}({
-                                            method: '${method}',
-                                            url: currentMethodPath,
-                                            customSerializer,
-                                            optionsMap,
-                                            options,
-                                        });
-                                    `,
-                                );
+                                if (!methodDescriptor) {
+                                    nodePath2.remove();
+                                    return;
+                                }
 
                                 optionsIdentifier.optional = true;
                                 optionsIdentifier.typeAnnotation = tsTypeAnnotation(
                                     tsTypeLiteral(
-                                        routeParams.map((routeParam) => {
-                                            const { index } = routeParam;
+                                        methodDescriptor?.routeParams?.map((routeParam) => {
+                                            const {
+                                                index,
+                                                type,
+                                                mappedName,
+                                            } = routeParam;
                                             const param = nodePath2?.node?.params?.[index];
 
                                             if (!param) {
@@ -537,14 +521,47 @@ export class Generator {
                                             const propertySignature = tsPropertySignature(identifier(currentIdentifier), annotation);
 
                                             propertySignature.optional = !required;
-                                            // TODO: set bodyOptions
+
+                                            if (!methodOptionsMap[type]) {
+                                                methodOptionsMap[type] = {};
+                                            }
+
+                                            methodOptionsMap[type][currentIdentifier] = mappedName;
 
                                             return propertySignature;
                                         }),
                                     ),
                                 );
+
+                                const newBody = template.ast(generatorContext.projectConfig.methodGenerator({
+                                    controllerDescriptor,
+                                    methodDescriptor: controllerDescriptor.methods[nodePath2?.node?.key?.name],
+                                    ensuredImportMap,
+                                    methodName: nodePath2?.node?.key?.name,
+                                    methodOptionsMap,
+                                }));
+
                                 nodePath2.node.params = [optionsIdentifier];
                                 nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
+                            },
+                        },
+                        nodePath1.scope,
+                    );
+
+                    traverse(
+                        nodePath1.node,
+                        {
+                            TSTypeReference(nodePath2) {
+                                if (
+                                    nodePath2?.node?.typeName?.type === 'Identifier' &&
+                                    importedDtoIdentifierNames.includes(nodePath2?.node?.typeName?.name) &&
+                                    !isInReturnTypeAnnotation(nodePath2)
+                                ) {
+                                    nodePath2.node.typeParameters = tsTypeParameterInstantiation([
+                                        _.clone(nodePath2.node),
+                                    ]);
+                                    nodePath2.node.typeName = identifier(ensuredImportMap.DeepPartial[0]);
+                                }
                             },
                         },
                         nodePath1.scope,

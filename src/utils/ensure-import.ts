@@ -9,7 +9,7 @@ import {
 import traverse from '@babel/traverse';
 import template from '@babel/template';
 
-export function ensureImport(options?: EnsureImportOptions & { ast: ParseResult<File> }) {
+export function ensureImport(options?: EnsureImportOptions & { ast: ParseResult<File> }): [string, string] {
     const {
         type,
         identifier: inputIdentifier,
