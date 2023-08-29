@@ -566,7 +566,7 @@ export class Generator {
                                     if ((nodePath2 as any)?.node?.key?.name === 'createOrUpdateDataset') {
                                         console.log('lenconda:1');
                                     }
-                                    methodOptionsMap[type][currentIdentifier] = mappedName;
+                                    methodOptionsMap[type][currentIdentifier] = mappedName || null;
 
                                     return propertySignature;
                                 }).filter((signature) => !!signature);
