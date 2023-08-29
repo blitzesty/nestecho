@@ -512,6 +512,10 @@ export class Generator {
                                     return nodePath2.remove();
                                 }
 
+                                if (nodePath2?.node?.key?.name === 'createOrUpdateDataset') {
+                                    console.log(JSON.stringify(methodDescriptor));
+                                }
+
                                 const signatures = (methodDescriptor?.routeParams || [])?.map((routeParam) => {
                                     const {
                                         index,
