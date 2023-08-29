@@ -43,6 +43,7 @@ import {
     Identifier,
     Statement,
     TSTypeAnnotation,
+    TSTypeReference,
     blockStatement,
     identifier,
     tsAnyKeyword,
@@ -283,29 +284,18 @@ export class Generator {
                                 const [routeParamTypeIndex] = key.split(':');
                                 const routeParamType = ROUTE_PARAM_TYPES[routeParamTypeIndex];
 
-                                // console.log(
-                                //     'LENCONDA',
-                                //     routeArgsMetadata, !metadata,
-                                //     typeof metadata?.index !== 'number',
-                                //     !routeParamType,
-                                //     typeof metadata?.data !== 'string',
-                                //     typeof metadata?.data !== 'undefined',
-                                //     (typeof metadata?.data === 'undefined' && routeParamType !== 'body'),
-                                // );
-
                                 if (
                                     !metadata ||
                                     typeof metadata?.index !== 'number' ||
                                     !routeParamType ||
-                                    typeof metadata?.data !== 'string' ||
-                                    (typeof metadata?.data === 'undefined' && routeParamType !== 'body')
+                                    (typeof metadata?.data !== 'string' && routeParamType !== 'body')
                                 ) {
                                     return null;
                                 }
 
                                 return {
                                     index: metadata?.index,
-                                    mappedName: metadata?.data,
+                                    mappedName: metadata?.data as string,
                                     type: routeParamType,
                                 };
                             })
@@ -482,29 +472,6 @@ export class Generator {
 
                     return currentResult;
                 }, [] as Array<[ImportItem, string]>);
-
-            console.log('LENCONDA:3', importItems.map((i) => i.local).join(','), importedDtoSpcifiers.map((i) => i[0].local).join(','));
-            // const importedDtoSpcifiers = ast.program.body
-            //     .filter((declaration) => declaration?.type === 'ImportDeclaration')
-            //     .reduce((result: Array<[Specifier, string]>, declaration: ImportDeclaration) => {
-            //         return result
-            //             .concat((declaration.specifiers || [])
-            //                 .map((specifier) => [specifier, declaration.source.value] as [Specifier, string])
-            //                 .filter(([, source]) => {
-            //                     let matched = false;
-            //                     let matcher = this.projectConfig.dtoImportMatcher?.sourceMatcher;
-
-            //                     if (typeof matcher === 'string') {
-            //                         matched = matcher === source;
-            //                     } else if (_.isRegExp(matcher)) {
-            //                         matched = matcher.test(source);
-            //                     } else if (typeof matcher === 'function') {
-            //                         matched = matcher(source);
-            //                     }
-
-            //                     return matched;
-            //                 }) as Array<[Specifier, string]>);
-            //     }, [] as Array<[Specifier, string]>);
             const allowedDecoratorImports = importItems.filter((importItem) => !this.projectConfig.decoratorRemovableChecker(importItem));
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const generatorContext = this;
@@ -613,10 +580,7 @@ export class Generator {
                                     methodOptionsMap,
                                 }));
 
-                                if (signatures.length > 0) {
-                                    nodePath2.node.params = [optionsIdentifier];
-                                }
-
+                                nodePath2.node.params = signatures.length > 0 ? [optionsIdentifier] : [];
                                 nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
                                 nodePath2.node.returnType = tsTypeAnnotation(
                                     tsTypeReference(
@@ -633,31 +597,34 @@ export class Generator {
                                     ),
                                 );
                                 removeDecorators(nodePath2.node, allowedDecoratorImports);
-                                // for (const param of nodePath2?.node?.params || []) {
-                                // traverse(
-                                //     (nodePath2?.node?.params || [])[0],
-                                //     {
-                                //         TSTypeAnnotation(nodePath3) {
-                                //             if (
-                                //                 nodePath3?.node?.typeAnnotation?.type !== 'TSTypeReference' ||
-                                //                 nodePath3?.node?.typeAnnotation?.typeName?.type !== 'Identifier' ||
-                                //                 !importedDtoSpcifiers.some(([specifier]) => {
-                                //                     return (
-                                //                         specifier?.local?.name === ((nodePath3?.node?.typeAnnotation as TSTypeReference)?.typeName as Identifier)?.name
-                                //                     );
-                                //                 })
-                                //             ) {
-                                //                 return;
-                                //             }
+                                (nodePath2?.node?.params || []).forEach((param) => {
+                                    const shouldAddGenericTypeParams: TSTypeReference[] = [];
 
-                                //             nodePath3.node.typeAnnotation.typeParameters = tsTypeParameterInstantiation([_.clone(nodePath3.node?.typeAnnotation)]);
-                                //             nodePath3.node.typeAnnotation.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
-                                //         },
-                                //     },
-                                //     nodePath2.scope,
-                                // );
-                                // }
-                                
+                                    traverse(
+                                        param,
+                                        {
+                                            TSTypeReference(nodePath2) {
+                                                if (nodePath2?.node?.typeName?.type !== 'Identifier') {
+                                                    return;
+                                                }
+
+                                                if (!importedDtoSpcifiers.some(([specifier]) => {
+                                                    return specifier.local === (nodePath2.node.typeName as Identifier).name;
+                                                })) {
+                                                    return;
+                                                }
+
+                                                shouldAddGenericTypeParams.push(nodePath2.node);
+                                            },
+                                        },
+                                        nodePath2.scope,
+                                    );
+
+                                    shouldAddGenericTypeParams.reverse().forEach((param) => {
+                                        param.typeParameters = tsTypeParameterInstantiation([_.clone(param)]);
+                                        param.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
+                                    });
+                                });
                             },
                         },
                         nodePath1.scope,
