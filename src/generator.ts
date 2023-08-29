@@ -11,12 +11,15 @@ import {
     TemplateContext,
     ControllerMethodDescriptor,
     MethodOptionsMap,
+    ImportItem,
 } from './interfaces';
 import {
     ensureImport,
-    isInReturnTypeAnnotation,
+    getImports,
+    lintCode,
     loadConfig,
     parseAst,
+    removeDecorators,
 } from './utils';
 import {
     DynamicModule,
@@ -37,17 +40,17 @@ import { globSync } from 'glob';
 import { ParseResult } from '@babel/parser';
 import {
     File,
-    ImportDeclaration,
-    ImportDefaultSpecifier,
-    ImportSpecifier,
+    Identifier,
     Statement,
     TSTypeAnnotation,
     blockStatement,
     identifier,
+    tsAnyKeyword,
     tsPropertySignature,
     tsTypeAnnotation,
     tsTypeLiteral,
     tsTypeParameterInstantiation,
+    tsTypeReference,
 } from '@babel/types';
 import * as _ from 'lodash';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
@@ -110,8 +113,8 @@ export class Generator {
         this.outputAbsolutePath = path.resolve(this.workDir, this.projectConfig.outputDir);
     }
 
-    public generate() {
-        this.generateControllers();
+    public async generate() {
+        this.generateControllerDescriptors();
 
         let fileTemplatePaths = globSync(this.internalTemplateAbsolutePath + '/**/*.hbs')
             .map((fileTemplatePath) => path.relative(this.internalTemplateAbsolutePath, fileTemplatePath))
@@ -121,10 +124,30 @@ export class Generator {
             this.generateFileFromTemplate(fileTemplatePath);
         }
 
-        return this.result;
+        await this.transpileAndGenerateControllers();
     }
 
-    protected generateControllers() {
+    public write() {
+        if (fs.existsSync(this.outputAbsolutePath)) {
+            fs.removeSync(this.outputAbsolutePath);
+        }
+
+        Object.entries(this.result).forEach(([filePath, fileContent]) => {
+            const dirPath = path.dirname(filePath);
+
+            if (fs.existsSync(dirPath) && !fs.statSync(dirPath).isDirectory()) {
+                fs.removeSync(dirPath);
+            }
+
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirpSync(dirPath);
+            }
+
+            fs.writeFileSync(filePath, fileContent, 'utf-8');
+        });
+    }
+
+    protected generateControllerDescriptors() {
         this.entryAst = parseAst('');
 
         const allControllers = this.findAllControllers(this.appModule);
@@ -260,12 +283,21 @@ export class Generator {
                                 const [routeParamTypeIndex] = key.split(':');
                                 const routeParamType = ROUTE_PARAM_TYPES[routeParamTypeIndex];
 
+                                // console.log(
+                                //     'LENCONDA',
+                                //     routeArgsMetadata, !metadata,
+                                //     typeof metadata?.index !== 'number',
+                                //     !routeParamType,
+                                //     typeof metadata?.data !== 'string',
+                                //     typeof metadata?.data !== 'undefined',
+                                //     (typeof metadata?.data === 'undefined' && routeParamType !== 'body'),
+                                // );
+
                                 if (
                                     !metadata ||
                                     typeof metadata?.index !== 'number' ||
                                     !routeParamType ||
                                     typeof metadata?.data !== 'string' ||
-                                    typeof metadata?.data !== 'undefined' ||
                                     (typeof metadata?.data === 'undefined' && routeParamType !== 'body')
                                 ) {
                                     return null;
@@ -363,7 +395,7 @@ export class Generator {
         return controllers;
     }
 
-    protected transpileAndGenerateControllers() {
+    protected async transpileAndGenerateControllers() {
         const controllerFilePaths = _.uniq(this.controllerDescriptors.map(({ filePath }) => filePath));
 
         for (const controllerFilePath of controllerFilePaths) {
@@ -374,6 +406,12 @@ export class Generator {
                     this.projectConfig.sourceCodeDir,
                 ),
                 controllerFilePath,
+            );
+            const controllerFileOutputAbsolutePath = path.resolve(
+                this.outputAbsolutePath,
+                this.projectConfig.outputCodeDir,
+                this.projectConfig.controllersOutputDir,
+                controllerFileRelativePath,
             );
 
             try {
@@ -395,11 +433,13 @@ export class Generator {
                     addImport: true,
                     type: 'ImportSpecifier',
                     source: path.relative(
-                        path.resolve(
-                            this.outputAbsolutePath,
-                            this.projectConfig.outputCodeDir,
-                            this.projectConfig.controllersOutputDir,
-                            controllerFileRelativePath,
+                        path.dirname(
+                            path.resolve(
+                                this.outputAbsolutePath,
+                                this.projectConfig.outputCodeDir,
+                                this.projectConfig.controllersOutputDir,
+                                controllerFileRelativePath,
+                            ),
                         ),
                         path.resolve(
                             this.outputAbsolutePath,
@@ -407,7 +447,7 @@ export class Generator {
                             'request',
                         ),
                     ),
-                    sourceMatcher: /\@blitzesty\/nestecho/g,
+                    sourceMatcher: /request/g,
                 }),
                 ...(this.projectConfig.ensureImports.reduce((result, ensureImportOptions) => {
                     result[ensureImportOptions.identifier] = ensureImport({
@@ -417,26 +457,55 @@ export class Generator {
                     return result;
                 }, {})),
             };
-            const importedDtoIdentifierNames = ast.program.body
-                .filter((declaration) => declaration?.type === 'ImportDeclaration')
-                .reduce((result: Array<ImportSpecifier | ImportDefaultSpecifier>, declaration: ImportDeclaration) => {
-                    return result.concat((declaration.specifiers || []).filter((specifier) => {
-                        const source = declaration.source.value;
-                        let matched = false;
-                        let matcher = this.projectConfig.dtoImportMatcher?.sourceMatcher;
+            const importItems = getImports(ast);
+            const importedDtoSpcifiers = Array
+                .from(importItems)
+                .reduce((result: Array<[ImportItem, string]>, importItem: ImportItem) => {
+                    let matched = false;
+                    let matcher = this.projectConfig.dtoImportMatcher?.sourceMatcher;
+                    const source = importItem.source;
+                    const currentResult = Array.from(result);
 
-                        if (typeof matcher === 'string') {
-                            matched = matcher === source;
-                        } else if (_.isRegExp(matcher)) {
-                            matched = matcher.test(source);
-                        } else if (typeof matcher === 'function') {
-                            matched = matcher(source);
-                        }
+                    if (typeof matcher === 'string') {
+                        matched = matcher === source;
+                    } else if (_.isRegExp(matcher)) {
+                        matched = matcher.test(source);
+                    } else if (typeof matcher === 'function') {
+                        matched = matcher(source);
+                    }
 
-                        return (specifier.type === 'ImportSpecifier' || specifier.type === 'ImportDefaultSpecifier') && matched;
-                    }) as Array<ImportSpecifier | ImportDefaultSpecifier>);
-                }, [] as Array<ImportSpecifier | ImportDefaultSpecifier>)
-                .map((specifier) => specifier.local.name);
+                    if (!matched) {
+                        return result;
+                    }
+
+                    currentResult.push(([importItem, source] as [ImportItem, string]));
+
+                    return currentResult;
+                }, [] as Array<[ImportItem, string]>);
+
+            console.log('LENCONDA:3', importItems.map((i) => i.local).join(','), importedDtoSpcifiers.map((i) => i[0].local).join(','));
+            // const importedDtoSpcifiers = ast.program.body
+            //     .filter((declaration) => declaration?.type === 'ImportDeclaration')
+            //     .reduce((result: Array<[Specifier, string]>, declaration: ImportDeclaration) => {
+            //         return result
+            //             .concat((declaration.specifiers || [])
+            //                 .map((specifier) => [specifier, declaration.source.value] as [Specifier, string])
+            //                 .filter(([, source]) => {
+            //                     let matched = false;
+            //                     let matcher = this.projectConfig.dtoImportMatcher?.sourceMatcher;
+
+            //                     if (typeof matcher === 'string') {
+            //                         matched = matcher === source;
+            //                     } else if (_.isRegExp(matcher)) {
+            //                         matched = matcher.test(source);
+            //                     } else if (typeof matcher === 'function') {
+            //                         matched = matcher(source);
+            //                     }
+
+            //                     return matched;
+            //                 }) as Array<[Specifier, string]>);
+            //     }, [] as Array<[Specifier, string]>);
+            const allowedDecoratorImports = importItems.filter((importItem) => !this.projectConfig.decoratorRemovableChecker(importItem));
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const generatorContext = this;
 
@@ -461,77 +530,80 @@ export class Generator {
                         nodePath1?.node,
                         {
                             ClassMethod(nodePath2) {
-                                if (nodePath2?.node?.key?.type !== 'Identifier' || !controllerDescriptor.methods?.[nodePath2?.node?.key?.name]) {
-                                    nodePath2.remove();
-                                    return;
+                                if (
+                                    nodePath2?.node?.key?.type !== 'Identifier' ||
+                                    nodePath2?.node?.key?.name === 'constructor'
+                                ) {
+                                    return nodePath2.remove();
                                 }
 
-                                const methodDescriptor = controllerDescriptor.methods[nodePath2?.node?.key?.name];
+                                const methodDescriptor = controllerDescriptor.methods?.[nodePath2?.node?.key?.name];
                                 const optionsIdentifier = identifier('options');
                                 const methodOptionsMap: MethodOptionsMap = {};
 
                                 if (!methodDescriptor) {
-                                    nodePath2.remove();
-                                    return;
+                                    return nodePath2.remove();
                                 }
 
+                                const signatures = (methodDescriptor?.routeParams || [])?.map((routeParam) => {
+                                    const {
+                                        index,
+                                        type,
+                                        mappedName,
+                                    } = routeParam;
+                                    const param = nodePath2?.node?.params?.[index];
+
+                                    if (!param) {
+                                        return null;
+                                    }
+
+                                    let currentIdentifier: string;
+                                    let annotation: TSTypeAnnotation;
+                                    let required = true;
+
+                                    switch (param.type) {
+                                        case 'Identifier':
+                                            currentIdentifier = param.name;
+                                            if (param.typeAnnotation?.type === 'TSTypeAnnotation') {
+                                                annotation = param.typeAnnotation;
+                                            }
+                                            break;
+                                        case 'AssignmentPattern':
+                                            if (param.left.type === 'Identifier') {
+                                                currentIdentifier = param.left.name;
+                                                if (param?.left?.typeAnnotation?.type === 'TSTypeAnnotation') {
+                                                    annotation = param.left.typeAnnotation;
+                                                }
+                                                required = false;
+                                            }
+                                            break;
+                                        default:
+                                            break;
+                                    }
+
+                                    if (!currentIdentifier || !annotation) {
+                                        return null;
+                                    }
+
+                                    const propertySignature = tsPropertySignature(identifier(currentIdentifier), annotation);
+
+                                    propertySignature.optional = !required;
+
+                                    if (!methodOptionsMap[type]) {
+                                        methodOptionsMap[type] = {};
+                                    }
+
+                                    methodOptionsMap[type][currentIdentifier] = mappedName;
+
+                                    return propertySignature;
+                                }).filter((signature) => !!signature);
+
                                 optionsIdentifier.optional = true;
-                                optionsIdentifier.typeAnnotation = tsTypeAnnotation(
-                                    tsTypeLiteral(
-                                        methodDescriptor?.routeParams?.map((routeParam) => {
-                                            const {
-                                                index,
-                                                type,
-                                                mappedName,
-                                            } = routeParam;
-                                            const param = nodePath2?.node?.params?.[index];
-
-                                            if (!param) {
-                                                return null;
-                                            }
-
-                                            let currentIdentifier: string;
-                                            let annotation: TSTypeAnnotation;
-                                            let required = true;
-
-                                            switch (param.type) {
-                                                case 'Identifier':
-                                                    currentIdentifier = param.name;
-                                                    if (param.typeAnnotation?.type === 'TSTypeAnnotation') {
-                                                        annotation = param.typeAnnotation;
-                                                    }
-                                                    break;
-                                                case 'AssignmentPattern':
-                                                    if (param.left.type === 'Identifier') {
-                                                        currentIdentifier = param.left.name;
-                                                        if (param?.left?.typeAnnotation?.type === 'TSTypeAnnotation') {
-                                                            annotation = param.left.typeAnnotation;
-                                                        }
-                                                        required = false;
-                                                    }
-                                                    break;
-                                                default:
-                                                    break;
-                                            }
-
-                                            if (!currentIdentifier || !annotation) {
-                                                return null;
-                                            }
-
-                                            const propertySignature = tsPropertySignature(identifier(currentIdentifier), annotation);
-
-                                            propertySignature.optional = !required;
-
-                                            if (!methodOptionsMap[type]) {
-                                                methodOptionsMap[type] = {};
-                                            }
-
-                                            methodOptionsMap[type][currentIdentifier] = mappedName;
-
-                                            return propertySignature;
-                                        }),
-                                    ),
-                                );
+                                optionsIdentifier.typeAnnotation = tsTypeAnnotation((
+                                    signatures?.length > 0
+                                        ? tsTypeLiteral(signatures)
+                                        : tsAnyKeyword()
+                                ));
 
                                 const newBody = template.ast(generatorContext.projectConfig.methodGenerator({
                                     controllerDescriptor,
@@ -541,33 +613,84 @@ export class Generator {
                                     methodOptionsMap,
                                 }));
 
-                                nodePath2.node.params = [optionsIdentifier];
+                                if (signatures.length > 0) {
+                                    nodePath2.node.params = [optionsIdentifier];
+                                }
+
                                 nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
+                                nodePath2.node.returnType = tsTypeAnnotation(
+                                    tsTypeReference(
+                                        identifier(ensuredImportMap?.['Response']?.[0] || 'Response'),
+                                        tsTypeParameterInstantiation([
+                                            tsTypeReference(
+                                                identifier('Awaited'),
+                                                tsTypeParameterInstantiation([
+                                                    (nodePath2.node?.returnType as TSTypeAnnotation)?.typeAnnotation ?? tsAnyKeyword(),
+                                                ]),
+                                            ),
+                                            tsTypeReference(identifier(ensuredImportMap?.['ResponseError']?.[0])),
+                                        ]),
+                                    ),
+                                );
+                                removeDecorators(nodePath2.node, allowedDecoratorImports);
+                                // for (const param of nodePath2?.node?.params || []) {
+                                // traverse(
+                                //     (nodePath2?.node?.params || [])[0],
+                                //     {
+                                //         TSTypeAnnotation(nodePath3) {
+                                //             if (
+                                //                 nodePath3?.node?.typeAnnotation?.type !== 'TSTypeReference' ||
+                                //                 nodePath3?.node?.typeAnnotation?.typeName?.type !== 'Identifier' ||
+                                //                 !importedDtoSpcifiers.some(([specifier]) => {
+                                //                     return (
+                                //                         specifier?.local?.name === ((nodePath3?.node?.typeAnnotation as TSTypeReference)?.typeName as Identifier)?.name
+                                //                     );
+                                //                 })
+                                //             ) {
+                                //                 return;
+                                //             }
+
+                                //             nodePath3.node.typeAnnotation.typeParameters = tsTypeParameterInstantiation([_.clone(nodePath3.node?.typeAnnotation)]);
+                                //             nodePath3.node.typeAnnotation.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
+                                //         },
+                                //     },
+                                //     nodePath2.scope,
+                                // );
+                                // }
+                                traverse(
+                                    (nodePath2?.node?.params || [])[0],
+                                    {
+                                        TSTypeReference(nodePath2) {
+                                            if (nodePath2?.node?.typeName?.type !== 'Identifier') {
+                                                return;
+                                            }
+
+                                            if (!importedDtoSpcifiers.some((a) => {
+                                                // console.log('LENCONDA:1', a);
+                                                const specifier = a[0];
+                                                return specifier.local === (nodePath2.node.typeName as Identifier).name;
+                                            })) {
+                                                return;
+                                            }
+
+                                            nodePath2.node.typeParameters = tsTypeParameterInstantiation([_.cloneDeep(nodePath2.node)]);
+                                            nodePath2.node.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
+                                        },
+                                    },
+                                    nodePath2.scope,
+                                );
                             },
                         },
                         nodePath1.scope,
                     );
 
-                    traverse(
-                        nodePath1.node,
-                        {
-                            TSTypeReference(nodePath2) {
-                                if (
-                                    nodePath2?.node?.typeName?.type === 'Identifier' &&
-                                    importedDtoIdentifierNames.includes(nodePath2?.node?.typeName?.name) &&
-                                    !isInReturnTypeAnnotation(nodePath2)
-                                ) {
-                                    nodePath2.node.typeParameters = tsTypeParameterInstantiation([
-                                        _.clone(nodePath2.node),
-                                    ]);
-                                    nodePath2.node.typeName = identifier(ensuredImportMap.DeepPartial[0]);
-                                }
-                            },
-                        },
-                        nodePath1.scope,
-                    );
+                    removeDecorators(nodePath1.node, allowedDecoratorImports);
                 },
             });
+
+            const code = await lintCode(generate(ast)?.code);
+
+            this.result[controllerFileOutputAbsolutePath] = code;
         }
     }
 
@@ -615,22 +738,9 @@ export class Generator {
     }
 
     private generateFileFromTemplate(filePath: string) {
-        const customTemplateFileRelativePath = this.projectConfig.templateReplacements[filePath];
-        let templateFileAbsolutePath: string;
+        const templateFileAbsolutePath = path.resolve(this.internalTemplateAbsolutePath, filePath);
         let fileRawContent: string;
         const outputCodeFolder = path.relative(this.workDir, path.resolve(this.workDir, this.projectConfig.outputCodeDir));
-
-        if (customTemplateFileRelativePath && typeof customTemplateFileRelativePath === 'string') {
-            templateFileAbsolutePath = path.resolve(
-                this.workDir,
-                this.projectConfig.templateDir,
-                customTemplateFileRelativePath,
-            );
-        } else if (typeof customTemplateFileRelativePath === 'undefined') {
-            templateFileAbsolutePath = path.resolve(this.internalTemplateAbsolutePath, filePath);
-        } else {
-            return false;
-        }
 
         try {
             fileRawContent = fs.readFileSync(templateFileAbsolutePath + '.hbs').toString();

@@ -24,5 +24,5 @@ export * from './response.interface';
 export * from './route-param-type.interface';
 export * from './route-param.interface';
 export * from './sdk-options.interface';
+export * from './specifier.interface';
 export * from './template-context.interface';
-export * from './template-replacements.interface';

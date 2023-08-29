@@ -47,6 +47,7 @@ export const defaultOptions = {
 
         return _.camelCase(path.basename(fileName.split('.').slice(0, -1).join('.')));
     },
+    decoratorRemovableChecker: (importItem) => !importItem?.source?.includes('@blitzesty/nestecho'),
     dtoImportMatcher: {
         importType: [
             'ImportSpecifier',
@@ -60,14 +61,21 @@ export const defaultOptions = {
             addImport: true,
             type: 'ImportSpecifier',
             source: '@blitzesty/nestecho/dist/interfaces/deep-partial.interface',
-            sourceMatcher: /\@blitzesty\/nestecho/g,
+            sourceMatcher: '@blitzesty/nestecho/dist/interfaces/deep-partial.interface',
         },
         {
-            identifier: 'CUSTOM_SERIALIZER',
+            identifier: 'Response',
             addImport: true,
             type: 'ImportSpecifier',
-            source: '@blitzesty/nestecho/dist/constants',
-            sourceMatcher: /\@blitzesty\/nestecho/g,
+            source: '@blitzesty/nestecho/dist/interfaces/response.interface',
+            sourceMatcher: '@blitzesty/nestecho/dist/interfaces/response.interface',
+        },
+        {
+            identifier: 'ResponseError',
+            addImport: true,
+            type: 'ImportSpecifier',
+            source: '@blitzesty/nestecho/dist/interfaces/response-error.interface',
+            sourceMatcher: '@blitzesty/nestecho/dist/interfaces/response-error.interface',
         },
     ],
     methodGenerator: ({
@@ -79,34 +87,37 @@ export const defaultOptions = {
     }) => {
         return `
             const currentMethodPath = '${normalizeUrlPath(controllerDescriptor.path + methodDescriptor.path)}';
-            const customSerializer = Reflect.getMetadata(CUSTOM_DESERIALIZER, this.${methodName});
             const optionsMap = ${JSON.stringify(methodOptionsMap)};
 
-            return await ${ensuredImportMap.request[0]}({
+            return await ${ensuredImportMap?.['request']?.[0]}({
                 method: '${methodDescriptor.method}',
                 url: currentMethodPath,
-                customSerializer,
+                metadatas: Reflect
+                    .getOwnMetadataKeys(this.${methodName})
+                    .reduce((result, metadataKey) => {
+                        result[metadataKey] = Reflect.getMetadata(metadataKey, this.${methodName});
+                        return result;
+                    }, {}),
                 optionsMap,
                 options,
             });
         `;
     },
-    outputDir: './sdk',
+    outputDir: './.sdk',
     outputCodeDir: './src',
     responseHandlerDescriptors: [],
     sdkClassName: 'Client',
     sdkOptionsInterfaceDescriptor: {
         type: 'ImportSpecifier',
         identifier: 'SDKOptions',
-        sourceMatcher: /^\@blitzesty\/nestecho\/*/g,
+        sourceMatcher: '@blitzesty/nestecho/dist/sdk-options.interface',
         source: '@blitzesty/nestecho/dist/sdk-options.interface',
     },
     sourceCodeDir: './src',
     templateDir: path.resolve(__dirname, '../templates'),
     templateReplacements: {},
     version: '0.0.0',
-    versioning: false,
-} as Required<Omit<Options, 'packageName' | 'version'>>;
+} as Required<Omit<Options, 'packageName'>>;
 
 export const ROUTE_PARAM_TYPES: Record<string, RouteParamType> = {
     '3': 'body',

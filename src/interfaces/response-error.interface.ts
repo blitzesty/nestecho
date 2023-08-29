@@ -1,4 +1,4 @@
-export interface ResponseError<Result = any, Information = any> {
+export interface ResponseError<Result = any, Data = any> {
     result: Result;
-    information?: Information;
+    data?: Data;
 }

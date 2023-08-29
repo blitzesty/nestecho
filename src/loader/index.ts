@@ -74,7 +74,14 @@ export default function(source) {
                     'import { Generator } from \'@blitzesty/nestecho/dist/generator\';',
                     appModuleImportCode,
                     '',
-                    `console.log('LENCONDA:', JSON.stringify(new Generator(${options.appModule.identifier}).generate()))`,
+                    'const run = async () => {',
+                    `    const generator = new Generator(${options.appModule.identifier});`,
+                    '',
+                    '    await generator.generate();',
+                    '    generator.write();',
+                    '};',
+                    '',
+                    'run();',
                 ].join('\n');
 
                 return callback(null, code);
