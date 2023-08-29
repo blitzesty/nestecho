@@ -657,28 +657,7 @@ export class Generator {
                                 //     nodePath2.scope,
                                 // );
                                 // }
-                                traverse(
-                                    (nodePath2?.node?.params || [])[0],
-                                    {
-                                        TSTypeReference(nodePath2) {
-                                            if (nodePath2?.node?.typeName?.type !== 'Identifier') {
-                                                return;
-                                            }
-
-                                            if (!importedDtoSpcifiers.some((a) => {
-                                                // console.log('LENCONDA:1', a);
-                                                const specifier = a[0];
-                                                return specifier.local === (nodePath2.node.typeName as Identifier).name;
-                                            })) {
-                                                return;
-                                            }
-
-                                            nodePath2.node.typeParameters = tsTypeParameterInstantiation([_.cloneDeep(nodePath2.node)]);
-                                            nodePath2.node.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
-                                        },
-                                    },
-                                    nodePath2.scope,
-                                );
+                                
                             },
                         },
                         nodePath1.scope,
