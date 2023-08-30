@@ -49,6 +49,7 @@ import {
     tsInterfaceBody,
     tsInterfaceDeclaration,
     tsPropertySignature,
+    tsTypeAliasDeclaration,
     tsTypeAnnotation,
     tsTypeParameterInstantiation,
     tsTypeReference,
@@ -488,6 +489,7 @@ export class Generator {
                                 }
 
                                 const methodName = nodePath2?.node?.key?.name;
+                                const methodStartCaseName = _.startCase(methodName).split(/\s+/g).join('');
                                 const methodDescriptor = controllerDescriptor.methods?.[methodName];
                                 let optionsIdentifier: Identifier;
                                 const methodOptionsMap: MethodOptionsMap = {};
@@ -548,7 +550,7 @@ export class Generator {
                                 }).filter((signature) => !!signature);
 
                                 if (signatures.length > 0) {
-                                    const interfaceName = `${_.startCase(methodName).split(/\s+/g).join('')}RequestOptions`;
+                                    const interfaceName = `${methodStartCaseName}RequestOptions`;
 
                                     ast.program.body.splice(
                                         lastImportDeclarationIndex,
@@ -582,17 +584,36 @@ export class Generator {
 
                                 nodePath2.node.params = optionsIdentifier ? [optionsIdentifier] : [];
                                 nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
-                                nodePath2.node.returnType = tsTypeAnnotation(
-                                    tsTypeReference(
-                                        identifier(ensuredImportMap?.['Response']?.[0] || 'Response'),
-                                        tsTypeParameterInstantiation([
+
+                                const responseTypeName = `${methodStartCaseName}Response`;
+
+                                ast.program.body.splice(
+                                    lastImportDeclarationIndex,
+                                    0,
+                                    exportNamedDeclaration(
+                                        tsTypeAliasDeclaration(
+                                            identifier(responseTypeName),
+                                            null,
                                             tsTypeReference(
-                                                identifier('Awaited'),
+                                                identifier(ensuredImportMap?.['Response']?.[0] || 'Response'),
                                                 tsTypeParameterInstantiation([
-                                                    (nodePath2.node?.returnType as TSTypeAnnotation)?.typeAnnotation ?? tsAnyKeyword(),
+                                                    tsTypeReference(
+                                                        identifier('Awaited'),
+                                                        tsTypeParameterInstantiation([
+                                                            (nodePath2.node?.returnType as TSTypeAnnotation)?.typeAnnotation ?? tsAnyKeyword(),
+                                                        ]),
+                                                    ),
+                                                    tsTypeReference(identifier(ensuredImportMap?.['ResponseError']?.[0])),
                                                 ]),
                                             ),
-                                            tsTypeReference(identifier(ensuredImportMap?.['ResponseError']?.[0])),
+                                        ),
+                                    ),
+                                );
+                                nodePath2.node.returnType = tsTypeAnnotation(
+                                    tsTypeReference(
+                                        identifier('Promise'),
+                                        tsTypeParameterInstantiation([
+                                            tsTypeReference(identifier(responseTypeName)),
                                         ]),
                                     ),
                                 );
