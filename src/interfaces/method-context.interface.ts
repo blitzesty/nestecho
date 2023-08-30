@@ -8,4 +8,6 @@ export interface MethodContext {
     methodDescriptor: ControllerMethodDescriptor;
     methodName: string;
     methodOptionsMap: MethodOptionsMap;
+    requestTypeIdentifierName: string;
+    responseTypeIdentifierName: string;
 }

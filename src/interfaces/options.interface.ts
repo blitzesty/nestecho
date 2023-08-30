@@ -6,6 +6,7 @@ import { ImportDescriptor } from './import-descriptor.interface';
 import { MethodContext } from './method-context.interface';
 import { EnsureImportOptions } from './ensure-import-options.interface';
 import { ImportItem } from './import-item.interface';
+import { Declaration } from '@babel/types';
 
 export interface Options {
     packageName: string;
@@ -20,7 +21,7 @@ export interface Options {
     decoratorRemovableChecker?: (data: ImportItem) => boolean;
     dtoImportMatcher?: DTOImportMatcher;
     ensureImports?: EnsureImportOptions[];
-    methodGenerator?: (context: MethodContext) => string;
+    methodGenerator?: (context: MethodContext) => Declaration[];
     outputDir?: string;
     outputCodeDir?: string;
     responseHandlerDescriptors?: ImportDescriptor[];

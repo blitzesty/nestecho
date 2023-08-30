@@ -2,7 +2,12 @@ import * as path from 'path';
 import { Options } from './interfaces/options.interface';
 import * as _ from 'lodash';
 import { RouteParamType } from './interfaces/route-param-type.interface';
-import { normalizeUrlPath } from './utils';
+import {
+    normalizeUrlPath,
+    parseAst,
+} from './utils';
+import { Statement } from '@babel/types';
+import traverse from '@babel/traverse';
 
 export const CUSTOM_DESERIALIZER = 'nestecho:metadata:custom_deserializer';
 export const FILE_PATH = 'nestecho:metadata:file_path';
@@ -84,24 +89,43 @@ export const defaultOptions = {
         methodDescriptor,
         methodName,
         methodOptionsMap,
+        requestTypeIdentifierName,
+        responseTypeIdentifierName,
     }) => {
-        return `
-            const currentMethodPath = '${normalizeUrlPath(controllerDescriptor.path + methodDescriptor.path)}';
-            const optionsMap = ${JSON.stringify(methodOptionsMap)};
+        const ast = parseAst(`
+            const foo = async () => {
+                const currentMethodPath = '${normalizeUrlPath(controllerDescriptor.path + methodDescriptor.path)}';
+                const optionsMap = ${JSON.stringify(methodOptionsMap)};
 
-            return await ${ensuredImportMap?.['request']?.[0]}({
-                method: '${methodDescriptor.method}',
-                url: currentMethodPath,
-                metadatas: Reflect
-                    .getOwnMetadataKeys(this.${methodName})
-                    .reduce((result, metadataKey) => {
-                        result[metadataKey] = Reflect.getMetadata(metadataKey, this.${methodName});
-                        return result;
-                    }, {}),
-                optionsMap,
-                options,
-            });
-        `;
+                return await ${ensuredImportMap?.['request']?.[0]}<${requestTypeIdentifierName}, ${responseTypeIdentifierName}>({
+                    method: '${methodDescriptor.method}',
+                    url: currentMethodPath,
+                    metadatas: Reflect
+                        .getOwnMetadataKeys(this.${methodName})
+                        .reduce((result, metadataKey) => {
+                            result[metadataKey] = Reflect.getMetadata(metadataKey, this.${methodName});
+                            return result;
+                        }, {}),
+                    optionsMap,
+                    options,
+                });
+            }
+        `);
+        let result: Statement[];
+
+        traverse(ast, {
+            ArrowFunctionExpression(nodePath1) {
+                if (nodePath1?.node?.body?.type !== 'BlockStatement') {
+                    return;
+                }
+
+                result = nodePath1.node.body?.body;
+
+                return nodePath1.stop();
+            },
+        });
+
+        return result;
     },
     outputDir: './.sdk',
     outputCodeDir: './src',

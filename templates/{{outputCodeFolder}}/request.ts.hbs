@@ -1,1 +1,7 @@
-export const request = () => {};
+import axios from 'axios';
+import { Response } from '@blitzesty/nestecho/dist/interfaces/response.interface';
+import { RequestOptions } from '@blitzesty/nestecho/dist/interfaces/request-options.interface';
+
+export const request = <Req, Res>(options: RequestOptions<Req>): Promise<Res> => {
+    // TODO:
+};

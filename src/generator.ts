@@ -493,6 +493,8 @@ export class Generator {
                                 const methodDescriptor = controllerDescriptor.methods?.[methodName];
                                 let optionsIdentifier: Identifier;
                                 const methodOptionsMap: MethodOptionsMap = {};
+                                const responseTypeIdentifierName = `${methodStartCaseName}Response`;
+                                const requestTypeIdentifierName = `${methodStartCaseName}RequestOptions`;
 
                                 if (!methodDescriptor) {
                                     return nodePath2.remove();
@@ -550,14 +552,12 @@ export class Generator {
                                 }).filter((signature) => !!signature);
 
                                 if (signatures.length > 0) {
-                                    const interfaceName = `${methodStartCaseName}RequestOptions`;
-
                                     ast.program.body.splice(
                                         lastImportDeclarationIndex,
                                         0,
                                         exportNamedDeclaration(
                                             tsInterfaceDeclaration(
-                                                identifier(interfaceName),
+                                                identifier(requestTypeIdentifierName),
                                                 null,
                                                 [],
                                                 tsInterfaceBody(signatures),
@@ -568,31 +568,30 @@ export class Generator {
                                     optionsIdentifier.optional = true;
                                     optionsIdentifier.typeAnnotation = tsTypeAnnotation(
                                         tsTypeReference(
-                                            identifier(interfaceName),
+                                            identifier(requestTypeIdentifierName),
                                         ),
                                     );
-                                    generatedInterfaces.push(interfaceName);
+                                    generatedInterfaces.push(requestTypeIdentifierName);
                                 }
 
-                                const newBody = template.ast(generatorContext.projectConfig.methodGenerator({
+                                const newBody = generatorContext.projectConfig.methodGenerator({
                                     controllerDescriptor,
                                     methodDescriptor: controllerDescriptor.methods[nodePath2?.node?.key?.name],
                                     ensuredImportMap,
                                     methodName: nodePath2?.node?.key?.name,
                                     methodOptionsMap,
-                                }));
+                                    requestTypeIdentifierName,
+                                    responseTypeIdentifierName,
+                                });
 
                                 nodePath2.node.params = optionsIdentifier ? [optionsIdentifier] : [];
                                 nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
-
-                                const responseTypeName = `${methodStartCaseName}Response`;
-
                                 ast.program.body.splice(
                                     lastImportDeclarationIndex,
                                     0,
                                     exportNamedDeclaration(
                                         tsTypeAliasDeclaration(
-                                            identifier(responseTypeName),
+                                            identifier(responseTypeIdentifierName),
                                             null,
                                             tsTypeReference(
                                                 identifier(ensuredImportMap?.['Response']?.[0] || 'Response'),
@@ -613,7 +612,7 @@ export class Generator {
                                     tsTypeReference(
                                         identifier('Promise'),
                                         tsTypeParameterInstantiation([
-                                            tsTypeReference(identifier(responseTypeName)),
+                                            tsTypeReference(identifier(responseTypeIdentifierName)),
                                         ]),
                                     ),
                                 );
