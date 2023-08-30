@@ -11,7 +11,6 @@ import {
     TemplateContext,
     ControllerMethodDescriptor,
     MethodOptionsMap,
-    ImportItem,
 } from './interfaces';
 import {
     ensureImport,
@@ -33,7 +32,7 @@ import {
     NESTECHO_EXCLUDE,
     ROUTE_PARAM_TYPES,
 } from './constants';
-import traverse from '@babel/traverse';
+import traverse, { NodePath } from '@babel/traverse';
 import * as Handlebars from 'handlebars';
 import generate from '@babel/generator';
 import { globSync } from 'glob';
@@ -43,7 +42,6 @@ import {
     Identifier,
     Statement,
     TSTypeAnnotation,
-    TSTypeReference,
     blockStatement,
     exportNamedDeclaration,
     identifier,
@@ -450,30 +448,6 @@ export class Generator {
                 }, {})),
             };
             const importItems = getImports(ast);
-            const importedDtoSpcifiers = Array
-                .from(importItems)
-                .reduce((result: Array<[ImportItem, string]>, importItem: ImportItem) => {
-                    let matched = false;
-                    let matcher = this.projectConfig.dtoImportMatcher?.sourceMatcher;
-                    const source = importItem.source;
-                    const currentResult = Array.from(result);
-
-                    if (typeof matcher === 'string') {
-                        matched = matcher === source;
-                    } else if (_.isRegExp(matcher)) {
-                        matched = matcher.test(source);
-                    } else if (typeof matcher === 'function') {
-                        matched = matcher(source);
-                    }
-
-                    if (!matched) {
-                        return result;
-                    }
-
-                    currentResult.push(([importItem, source] as [ImportItem, string]));
-
-                    return currentResult;
-                }, [] as Array<[ImportItem, string]>);
             const allowedDecoratorImports = importItems.filter((importItem) => !this.projectConfig.decoratorRemovableChecker(importItem));
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const generatorContext = this;
@@ -620,40 +594,38 @@ export class Generator {
                                     ),
                                 );
                                 removeDecorators(nodePath2.node, allowedDecoratorImports);
-                                (nodePath2?.node?.params || []).forEach((param) => {
-                                    const shouldAddGenericTypeParams: TSTypeReference[] = [];
-
-                                    traverse(
-                                        param,
-                                        {
-                                            TSTypeReference(nodePath2) {
-                                                if (nodePath2?.node?.typeName?.type !== 'Identifier') {
-                                                    return;
-                                                }
-
-                                                if (!importedDtoSpcifiers.some(([specifier]) => {
-                                                    return specifier.local === (nodePath2.node.typeName as Identifier).name;
-                                                })) {
-                                                    return;
-                                                }
-
-                                                shouldAddGenericTypeParams.push(nodePath2.node);
-                                            },
-                                        },
-                                        nodePath2.scope,
-                                    );
-
-                                    shouldAddGenericTypeParams.reverse().forEach((param) => {
-                                        param.typeParameters = tsTypeParameterInstantiation([_.clone(param)]);
-                                        param.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
-                                    });
-                                });
                             },
                         },
                         nodePath1.scope,
                     );
 
                     removeDecorators(nodePath1.node, allowedDecoratorImports);
+                },
+            });
+            traverse(ast, {
+                TSInterfaceDeclaration(nodePath1) {
+                    const identifierNodePaths: NodePath<Identifier>[] = [];
+
+                    traverse(
+                        nodePath1.node,
+                        {
+                            Identifier(nodePath2) {
+                                if (nodePath2?.parentPath?.node?.type === 'TSTypeReference') {
+                                    identifierNodePaths.push(nodePath2);
+                                }
+                            },
+                        },
+                        nodePath1.scope,
+                    );
+
+                    identifierNodePaths.reverse().forEach((identifierNodePath) => {
+                        if (identifierNodePath?.parentPath?.node?.type !== 'TSTypeReference') {
+                            return;
+                        }
+
+                        identifierNodePath.parentPath.node.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
+                        identifierNodePath.parentPath.node.typeParameters = tsTypeParameterInstantiation([_.clone(identifierNodePath.parentPath.node)]);
+                    });
                 },
             });
 
