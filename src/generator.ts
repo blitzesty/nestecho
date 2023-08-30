@@ -19,6 +19,7 @@ import {
     loadConfig,
     parseAst,
     removeDecorators,
+    removeUnusedImports,
 } from './utils';
 import {
     DynamicModule,
@@ -657,6 +658,7 @@ export class Generator {
                     });
                 },
             });
+            removeUnusedImports(ast);
 
             const code = await lintCode(generate(ast)?.code);
 

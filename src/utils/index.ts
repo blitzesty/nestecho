@@ -6,3 +6,4 @@ export * from './match-once';
 export * from './normalize-url-path';
 export * from './parse-ast';
 export * from './remove-decorators';
+export * from './remove-unused-imports';
