@@ -332,7 +332,7 @@ export class Generator {
                                 this.workDir,
                                 this.projectConfig.sourceCodeDir,
                             ),
-                            fileAbsolutePath,
+                            fileAbsolutePath.split('.').slice(0, -1).join('.'),
                         ),
                     ),
                 ),
@@ -452,6 +452,7 @@ export class Generator {
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const generatorContext = this;
             let lastImportDeclarationIndex = -1;
+            const generatedInterfaces: string[] = [];
 
             ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
             ast.program.body.forEach((declaration, index) => {
@@ -548,6 +549,7 @@ export class Generator {
 
                                 if (signatures.length > 0) {
                                     const interfaceName = `${_.startCase(methodName).split(/\s+/g).join('')}RequestOptions`;
+
                                     ast.program.body.splice(
                                         lastImportDeclarationIndex,
                                         0,
@@ -567,6 +569,7 @@ export class Generator {
                                             identifier(interfaceName),
                                         ),
                                     );
+                                    generatedInterfaces.push(interfaceName);
                                 }
 
                                 const newBody = template.ast(generatorContext.projectConfig.methodGenerator({
@@ -606,6 +609,10 @@ export class Generator {
                 TSInterfaceDeclaration(nodePath1) {
                     const identifierNodePaths: NodePath<Identifier>[] = [];
 
+                    if (!generatedInterfaces.includes(nodePath1.node.id.name)) {
+                        return;
+                    }
+
                     traverse(
                         nodePath1.node,
                         {
@@ -623,8 +630,10 @@ export class Generator {
                             return;
                         }
 
+                        const originalIdentifier = _.clone(identifierNodePath.parentPath.node);
+
                         identifierNodePath.parentPath.node.typeName = identifier(ensuredImportMap?.['DeepPartial']?.[0]);
-                        identifierNodePath.parentPath.node.typeParameters = tsTypeParameterInstantiation([_.clone(identifierNodePath.parentPath.node)]);
+                        identifierNodePath.parentPath.node.typeParameters = tsTypeParameterInstantiation([originalIdentifier]);
                     });
                 },
             });
