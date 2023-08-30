@@ -1,6 +1,5 @@
 export * from './ensure-import';
 export * from './get-imports';
-export * from './is-in-return-type-annotation';
 export * from './lint-code';
 export * from './load-config';
 export * from './match-once';

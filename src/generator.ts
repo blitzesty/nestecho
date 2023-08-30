@@ -45,11 +45,13 @@ import {
     TSTypeAnnotation,
     TSTypeReference,
     blockStatement,
+    exportNamedDeclaration,
     identifier,
     tsAnyKeyword,
+    tsInterfaceBody,
+    tsInterfaceDeclaration,
     tsPropertySignature,
     tsTypeAnnotation,
-    tsTypeLiteral,
     tsTypeParameterInstantiation,
     tsTypeReference,
 } from '@babel/types';
@@ -475,8 +477,14 @@ export class Generator {
             const allowedDecoratorImports = importItems.filter((importItem) => !this.projectConfig.decoratorRemovableChecker(importItem));
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const generatorContext = this;
+            let lastImportDeclarationIndex = -1;
 
             ast.program.body.unshift(template.ast('import \'reflect-metadata\';') as Statement);
+            ast.program.body.forEach((declaration, index) => {
+                if (declaration.type === 'ImportDeclaration') {
+                    lastImportDeclarationIndex = index;
+                }
+            });
 
             traverse(ast, {
                 ClassDeclaration(nodePath1) {
@@ -504,8 +512,9 @@ export class Generator {
                                     return nodePath2.remove();
                                 }
 
-                                const methodDescriptor = controllerDescriptor.methods?.[nodePath2?.node?.key?.name];
-                                const optionsIdentifier = identifier('options');
+                                const methodName = nodePath2?.node?.key?.name;
+                                const methodDescriptor = controllerDescriptor.methods?.[methodName];
+                                let optionsIdentifier: Identifier;
                                 const methodOptionsMap: MethodOptionsMap = {};
 
                                 if (!methodDescriptor) {
@@ -526,7 +535,6 @@ export class Generator {
 
                                     let currentIdentifier: string;
                                     let annotation: TSTypeAnnotation;
-                                    let required = true;
 
                                     switch (param.type) {
                                         case 'Identifier':
@@ -541,7 +549,6 @@ export class Generator {
                                                 if (param?.left?.typeAnnotation?.type === 'TSTypeAnnotation') {
                                                     annotation = param.left.typeAnnotation;
                                                 }
-                                                required = false;
                                             }
                                             break;
                                         default:
@@ -554,7 +561,7 @@ export class Generator {
 
                                     const propertySignature = tsPropertySignature(identifier(currentIdentifier), annotation);
 
-                                    propertySignature.optional = !required;
+                                    propertySignature.optional = true;
 
                                     if (!methodOptionsMap[type]) {
                                         methodOptionsMap[type] = {};
@@ -565,12 +572,28 @@ export class Generator {
                                     return propertySignature;
                                 }).filter((signature) => !!signature);
 
-                                optionsIdentifier.optional = true;
-                                optionsIdentifier.typeAnnotation = tsTypeAnnotation((
-                                    signatures?.length > 0
-                                        ? tsTypeLiteral(signatures)
-                                        : tsAnyKeyword()
-                                ));
+                                if (signatures.length > 0) {
+                                    const interfaceName = `${_.startCase(methodName).split(/\s+/g).join('')}RequestOptions`;
+                                    ast.program.body.splice(
+                                        lastImportDeclarationIndex,
+                                        0,
+                                        exportNamedDeclaration(
+                                            tsInterfaceDeclaration(
+                                                identifier(interfaceName),
+                                                null,
+                                                [],
+                                                tsInterfaceBody(signatures),
+                                            ),
+                                        ),
+                                    );
+                                    optionsIdentifier = identifier('options');
+                                    optionsIdentifier.optional = true;
+                                    optionsIdentifier.typeAnnotation = tsTypeAnnotation(
+                                        tsTypeReference(
+                                            identifier(interfaceName),
+                                        ),
+                                    );
+                                }
 
                                 const newBody = template.ast(generatorContext.projectConfig.methodGenerator({
                                     controllerDescriptor,
@@ -580,7 +603,7 @@ export class Generator {
                                     methodOptionsMap,
                                 }));
 
-                                nodePath2.node.params = signatures.length > 0 ? [optionsIdentifier] : [];
+                                nodePath2.node.params = optionsIdentifier ? [optionsIdentifier] : [];
                                 nodePath2.node.body = blockStatement(Array.isArray(newBody) ? newBody : [newBody]);
                                 nodePath2.node.returnType = tsTypeAnnotation(
                                     tsTypeReference(

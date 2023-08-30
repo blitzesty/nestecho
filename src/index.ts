@@ -1,10 +1,10 @@
 import loader from './loader';
 import { Command } from 'commander';
 
-export * from './codegen';
 export * from './constants';
 export * from './decorators';
 export * from './define-config';
+export * from './generator';
 export * from './interfaces';
 export * from './utils';
 
