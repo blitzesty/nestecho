@@ -5,6 +5,7 @@ export * from './controller-method-descriptor.interface';
 export * from './controller-path.interface';
 export * from './controller-scheme-context.interface';
 export * from './controller-scheme.interface';
+export * from './controller-source-descriptor.interface';
 export * from './custom-deserializer-factory.interface';
 export * from './deep-partial.interface';
 export * from './describe-decorator-options.interface';

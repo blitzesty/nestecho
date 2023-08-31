@@ -37,9 +37,7 @@ import traverse, { NodePath } from '@babel/traverse';
 import * as Handlebars from 'handlebars';
 import generate from '@babel/generator';
 import { globSync } from 'glob';
-import { ParseResult } from '@babel/parser';
 import {
-    File,
     Identifier,
     Statement,
     TSTypeAnnotation,
@@ -59,35 +57,14 @@ import * as _ from 'lodash';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import template from '@babel/template';
 
-interface CustomFileProcessorContext {
-    entryAst: ParseResult<File>;
-    entryControllerPaths: ControllerPath[];
-    rawContent: string;
-    templateContext: TemplateContext;
-}
-
 export class Generator {
     protected outputAbsolutePath: string;
     protected projectConfig: Options;
     protected result: Record<string, string> = {};
     protected workDir: string;
-    protected customFileProcessors: Record<string, (context: CustomFileProcessorContext) => string> = {
-        '{{outputCodeFolder}}/index.ts': ({
-            entryAst,
-            templateContext,
-            rawContent,
-        }) => {
-            const contentTemplate = Handlebars.compile(rawContent);
-            return [
-                generate(entryAst).code,
-                contentTemplate(templateContext),
-            ].join('\n');
-        },
-    };
     protected readonly internalTemplateAbsolutePath = path.resolve(__dirname, '../templates');
 
     private controllerDescriptors: ControllerDescriptor[] = [];
-    private entryAst: ParseResult<File>;
     private entryControllerPaths: ControllerPath[] = [];
 
     public constructor(
@@ -114,6 +91,20 @@ export class Generator {
 
         this.projectConfig = loadConfig(this.options.configFilePath);
         this.outputAbsolutePath = path.resolve(this.workDir, this.projectConfig.outputDir);
+
+        Handlebars.registerHelper('switch', function(value, options) {
+            // eslint-disable-next-line @typescript-eslint/no-invalid-this
+            this.switch_value = value;
+            // eslint-disable-next-line @typescript-eslint/no-invalid-this
+            return options.fn(this);
+        });
+        Handlebars.registerHelper('case', function(value, options) {
+            // eslint-disable-next-line @typescript-eslint/no-invalid-this
+            if (value === this.switch_value) {
+                // eslint-disable-next-line @typescript-eslint/no-invalid-this
+                return options.fn(this);
+            }
+        });
     }
 
     public async generate() {
@@ -151,8 +142,6 @@ export class Generator {
     }
 
     protected generateControllerDescriptors() {
-        this.entryAst = parseAst('');
-
         const allControllers = this.findAllControllers(this.appModule);
         const paths: string[] = [];
 
@@ -221,7 +210,15 @@ export class Generator {
                         exportName = nodePath?.node?.name;
 
                         if (!exportName) {
-                            exportName = path.basename(fileAbsolutePath).split('.').slice(0, -1).join('.');
+                            exportName = _.startCase(
+                                path
+                                    .basename(fileAbsolutePath)
+                                    .split('.')
+                                    .slice(0, -1)
+                                    .join('_'),
+                            )
+                                .split(/\s+/g)
+                                .join('');
                             noExplicitName = true;
                         }
 
@@ -254,7 +251,7 @@ export class Generator {
                 continue;
             }
 
-            const controllerDescriptorWithoutImportName: Omit<ControllerDescriptor, 'importName'> = {
+            const controllerDescriptor: ControllerDescriptor = {
                 exportName: description.exportName || exportName,
                 filePath: fileAbsolutePath,
                 importType: description.importType || importType,
@@ -309,41 +306,12 @@ export class Generator {
                 name: controller.name,
                 noExplicitName,
                 path: Reflect.getMetadata('path', controller),
+                importName: description.exportName || exportName,
             };
 
-            if (!Object.keys(controllerDescriptorWithoutImportName.methods).length) {
+            if (!Object.keys(controllerDescriptor.methods).length) {
                 continue;
             }
-
-            const [importName] = ensureImport({
-                ast: this.entryAst,
-                type: controllerDescriptorWithoutImportName.importType,
-                identifier: controllerDescriptorWithoutImportName.exportName,
-                sourceMatcher: new RegExp(path.basename(fileAbsolutePath.split('.').slice(0, -1).join('.')), 'g'),
-                source: '.' + path.sep + path.relative(
-                    path.resolve(
-                        this.outputAbsolutePath,
-                        this.projectConfig.outputCodeDir,
-                    ),
-                    path.resolve(
-                        this.outputAbsolutePath,
-                        this.projectConfig.outputCodeDir,
-                        this.projectConfig.controllersOutputDir,
-                        path.relative(
-                            path.resolve(
-                                this.workDir,
-                                this.projectConfig.sourceCodeDir,
-                            ),
-                            fileAbsolutePath.split('.').slice(0, -1).join('.'),
-                        ),
-                    ),
-                ),
-                addImport: true,
-            });
-            const controllerDescriptor: ControllerDescriptor = {
-                ...controllerDescriptorWithoutImportName,
-                importName,
-            };
 
             controllerItem.children.push({
                 path: pathname.split('.').pop(),
@@ -728,20 +696,9 @@ export class Generator {
             outputCodeFolder,
         });
         let fileContent: string;
-        const customProcessor = this.customFileProcessors[filePath];
         const templateContext = this.getTemplateContext();
 
-        if (typeof customProcessor === 'function') {
-            fileContent = customProcessor({
-                entryAst: this.entryAst,
-                entryControllerPaths: this.entryControllerPaths,
-                rawContent: fileRawContent,
-                templateContext,
-            });
-        } else {
-            fileContent = fileTemplate(templateContext);
-        }
-
+        fileContent = fileTemplate(templateContext);
         this.result[path.resolve(this.outputAbsolutePath, pathname)] = fileContent;
 
         return true;
@@ -749,10 +706,33 @@ export class Generator {
 
     private getTemplateContext(): TemplateContext {
         return {
-            projectConfig: this.projectConfig,
-            workDir: this.workDir,
+            controllerSourceDescriptors: this.controllerDescriptors.map((controllerDescriptor) => {
+                return {
+                    ...controllerDescriptor,
+                    source: '.' + path.sep + path.relative(
+                        path.resolve(
+                            this.outputAbsolutePath,
+                            this.projectConfig.outputCodeDir,
+                        ),
+                        path.resolve(
+                            this.outputAbsolutePath,
+                            this.projectConfig.outputCodeDir,
+                            this.projectConfig.controllersOutputDir,
+                            path.relative(
+                                path.resolve(
+                                    this.workDir,
+                                    this.projectConfig.sourceCodeDir,
+                                ),
+                                controllerDescriptor.filePath.split('.').slice(0, -1).join('.'),
+                            ),
+                        ),
+                    ),
+                };
+            }),
             outputAbsolutePath: this.outputAbsolutePath,
             paths: this.entryControllerPaths,
+            projectConfig: this.projectConfig,
+            workDir: this.workDir,
         };
     }
 }

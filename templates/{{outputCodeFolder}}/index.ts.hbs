@@ -10,6 +10,20 @@
     }
 {{/inline}}
 
+{{#each controllerSourceDescriptors}}
+{{#switch this.importType}}
+{{#case 'ImportSpecifier'}}
+import { {{this.importName}} } from '{{this.source}}';
+{{/case}}
+{{#case 'ImportDefaultSpecifier'}}
+import {{this.importName}} from '{{this.source}}';
+{{/case}}
+{{#case 'ImportNamespaceSpecifier'}}
+import * as {{this.importName}} from '{{this.source}}';
+{{/case}}
+{{/switch}}
+{{/each}}
+
 export class {{projectConfig.sdkClassName}} {
     {{#each paths}}
     {{#if this.controllerDescriptor}}
